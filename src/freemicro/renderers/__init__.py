@@ -17,5 +17,6 @@ from freemicro.renderers import screen as screen  # noqa: E402,F401
 from freemicro.renderers import busylight as busylight  # noqa: E402,F401
 from freemicro.renderers import micro_via as micro_via  # noqa: E402,F401
 from freemicro.renderers import micro_qmk as micro_qmk  # noqa: E402,F401
+from freemicro.renderers import micro_sniffed as micro_sniffed  # noqa: E402,F401
 
 __all__ = ["REGISTRY", "Renderer", "available_renderers", "select"]

@@ -85,6 +85,7 @@ flowchart LR
 |---|---|---|---|
 | `screen` | Always-on-top chip; ANSI console fallback | No | ✅ **Guaranteed** — always available |
 | `busylight` | blink(1), Luxafor, BlinkStick, MuteMe… via [`busylight-core`](https://github.com/JnyJny/busylight) | No | ✅ **Reliable** |
+| `micro-sniffed` | Replays the ChatGPT app's *own* captured LED protocol → exact Codex behaviour, on Claude Code | No | 🧪 **Experimental** — see runbook |
 | `micro-via` | A VIA/QMK pad's LEDs over raw HID (likely global colour) | No | 🧪 **Experimental** — pending M0 |
 | `micro-qmk` | Per-key Agent-Key colours via custom firmware | Yes | 🧪 **Experimental** — M3 |
 
@@ -121,7 +122,21 @@ freemicro verify-leds        # drives the pad's LEDs and records a verdict
 
 It cycles the LEDs through every state so you can watch the top row, asks whether they moved (per-key or global, app-quit needed?), and saves a report you can attach to a Hardware Report issue. Purely the documented VIA/QMK path — no firmware, no proprietary protocol.
 
-**How we plan to actually drive the LEDs** — three ranked paths (VIA raw-HID with no reflash, sniff-and-replay the app's protocol, or reflash the open-source QMK firmware), with effort/risk/reversibility for each, are worked out in **[`docs/LED-STRATEGY.md`](docs/LED-STRATEGY.md)**. Short version: the chassis is an open, VIA-capable, RP2040-based Work Louder Creator Micro 2, so the *hardware* supports every path — only the Codex firmware profile's lockdown is unverified.
+**How we actually drive the LEDs** — three ranked paths (VIA raw-HID with no reflash, sniff-and-replay the app's protocol, or reflash the open-source QMK firmware), with effort/risk/reversibility for each, are worked out in **[`docs/LED-STRATEGY.md`](docs/LED-STRATEGY.md)**. Short version: the chassis is an open, VIA-capable, RP2040-based Work Louder Creator Micro 2, so the *hardware* supports every path — only the Codex firmware profile's lockdown is unverified.
+
+### 🎯 Replicate the Codex Micro exactly (sniff & replay)
+
+The highest-fidelity path: capture the exact HID reports the ChatGPT app sends for each Codex state, then replay them from Claude Code — identical colours and per-key patterns, driven by your terminal agent. Full turnkey procedure in **[`docs/SNIFF-RUNBOOK.md`](docs/SNIFF-RUNBOOK.md)**:
+
+```sh
+# on the machine the pad is plugged into, after capturing per-state HID reports:
+freemicro learn thinking=thinking.json awaiting=awaiting.json done=done.json \
+                error=error.json idle=idle.json --vid-pid 574c:1df9
+# quit the ChatGPT app (channel contention), then:
+freemicro watch    # the 'micro-sniffed' renderer now drives the pad from Claude Code
+```
+
+*This observes HID reports on the wire for personal interoperability with hardware you own; it never extracts or redistributes firmware.*
 
 ## Roadmap
 

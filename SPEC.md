@@ -36,9 +36,16 @@ gap to close is: (a) drive the LEDs from an arbitrary agent's real state, and
 - Be a good OSS citizen: MIT, documented, crowdsourced hardware capability DB.
 
 **Non-goals**
-- Reverse-engineering or redistributing OpenAI/Work Louder firmware.
+- Redistributing OpenAI/Work Louder firmware.
 - Replacing Work Louder Input for basic keystroke macros (we complement it).
 - Local inference or anything touching the Codex model itself.
+
+**Scope note (updated):** the owner has authorized **observing the app→pad HID
+protocol on the wire and replaying it** for personal interoperability with
+owned hardware (Path B — see [`docs/SNIFF-RUNBOOK.md`](docs/SNIFF-RUNBOOK.md)).
+This narrows the original "no reverse-engineering" line to a firm "no
+redistributing firmware." We describe observed HID reports; we never extract,
+modify, or ship anyone's firmware.
 
 ## 3. Prior art (from research, 2026-07)
 
