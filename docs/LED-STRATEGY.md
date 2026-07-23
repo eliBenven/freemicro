@@ -53,7 +53,10 @@ one. No public teardown or VIA-detection report exists yet. `freemicro detect`
 documented VIA lighting commands. Already implemented in
 `src/freemicro/renderers/micro_via.py`.
 **How:** `freemicro detect` → look for `usage_page 0xFF60`. If present, run
-`freemicro render done` and watch the keys.
+**`freemicro verify-leds`** — it drives the LEDs through every state, asks
+whether the Agent Keys moved (per-key or global? app-quit needed?), and saves a
+report for the capability DB. (This harness is built and tested; it just needs
+the pad.)
 **Effort:** minutes. **Risk:** low. **Reversible:** N/A (no firmware change).
 **Legality:** clean — documented open protocol on your own device.
 **Catch:** VIA lighting is often **global**, not per-key; and the Codex profile
@@ -98,8 +101,8 @@ as a single point of failure.
 ## Recommended sequence when the pad arrives
 
 1. `freemicro detect --json` → is there a `0xFF60` channel? Save to `hardware/`.
-2. If yes → **Path A**: `freemicro render done`. Do the Agent Keys move?
-   Per-key or global? Record it.
+2. If yes → **Path A**: `freemicro verify-leds`. Do the Agent Keys move?
+   Per-key or global? It records the verdict automatically.
 3. Regardless → do a **red/green sniff** of the ChatGPT app (Path B recon) — even
    if you don't ship the replay, the capture *documents the real protocol* and
    is a community first for the capability DB.

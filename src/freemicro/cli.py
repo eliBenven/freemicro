@@ -177,6 +177,35 @@ def cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verify_leds(args: argparse.Namespace) -> int:
+    """Active write-test: drive the pad's LEDs and record the verdict (Path A)."""
+    from freemicro.verify import run_led_verify
+
+    interactive = (not args.yes) and sys.stdin.isatty()
+    print("FreeMicro — LED write-test (Path A). Watch the pad's top row.\n")
+    result = run_led_verify(interactive=interactive, hold=args.hold)
+
+    if result["renderer"]:
+        print(f"  Writable LED channel: yes (via {result['renderer']})")
+        verdict = result.get("verdict")
+        if verdict:
+            moved = verdict["agent_keys_moved"]
+            print(f"  Agent Keys moved:     {'yes' if moved else 'no'}")
+            if moved:
+                print(f"  Granularity:          {verdict['granularity']}")
+                print(f"  Needed app quit:      {verdict['chatgpt_app_quit_required']}")
+        elif not interactive:
+            print("  (non-interactive: writes attempted; re-run in a terminal for a verdict)")
+    else:
+        print("  Writable LED channel: no")
+    print()
+    for note in result["notes"]:
+        print(f"  • {note}")
+    print(f"\n  Report saved: {result['report_path']}")
+    print("  Submit it via the Hardware Report issue to grow the capability DB.")
+    return 0
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
     """Play the full state sequence on the real renderer(s).
 
@@ -295,6 +324,11 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("watch", help="run the renderer loop")
     w.add_argument("--interval", type=float, default=0.25, help="poll seconds")
     w.set_defaults(func=cmd_watch)
+
+    v = sub.add_parser("verify-leds", help="active write-test: light the pad and record a verdict")
+    v.add_argument("--hold", type=float, default=1.5, help="seconds per state")
+    v.add_argument("--yes", action="store_true", help="skip prompts (non-interactive)")
+    v.set_defaults(func=cmd_verify_leds)
 
     dm = sub.add_parser("demo", help="play the full state sequence (no agent/hw needed)")
     dm.add_argument("--step", type=float, default=1.5, help="seconds per state")

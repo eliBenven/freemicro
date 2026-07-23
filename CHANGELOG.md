@@ -14,6 +14,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   screen fallback that is always kept reachable.
 - **Detector** (`freemicro.detector`): read-only HID capability probe for
   Milestone 0.
+- **LED write-test** (`freemicro.verify` / `freemicro verify-leds`): actively
+  drives the writable LED renderers through the state sequence (Path A from
+  `docs/LED-STRATEGY.md`), captures a human verdict (did the Agent Keys move?
+  per-key or global? app-quit needed?), and writes a report for the capability
+  DB. Uses only the documented VIA/QMK path — no firmware, no proprietary
+  protocol.
 - **CLI** (`freemicro`): `detect`, `install`, `hook`, `watch`, `demo`, `emit`,
   `render`, `renderers`, `status`. Hooks are installed with an absolute
   interpreter path so they resolve under Claude Code's minimal environment.
@@ -23,9 +29,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a VIA skeleton.
 - **Firmware**: optional QMK keymap reference for per-key Agent-Key colours.
 - **Crowdsourced hardware DB** scaffold (`hardware/capabilities.json`).
-- Test suite (40 tests) covering the state engine, hook classifier, renderer
-  selection, hook installer, detector, and a full-session end-to-end pipeline
-  (hook events → store → resolved state).
+- Test suite (44 tests) covering the state engine, hook classifier, renderer
+  selection, hook installer, detector, the LED write-test harness, and a
+  full-session end-to-end pipeline (hook events → store → resolved state).
 
 ### Not yet verified
 - Driving the **shipping Codex Micro's Agent Keys** — blocked on the Milestone 0

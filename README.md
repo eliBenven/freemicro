@@ -113,12 +113,20 @@ freemicro detect --json     # paste this into a Hardware Report issue
 
 It's **read-only** — it enumerates HID interfaces, flags a `0xFF60` writable channel, and prints VID/PID. Publishing that report is a genuine community first. Results feed [`hardware/capabilities.json`](hardware/capabilities.json).
 
+Then, the active write-test — the moment-of-truth for whether we can actually light the Agent Keys:
+
+```sh
+freemicro verify-leds        # drives the pad's LEDs and records a verdict
+```
+
+It cycles the LEDs through every state so you can watch the top row, asks whether they moved (per-key or global, app-quit needed?), and saves a report you can attach to a Hardware Report issue. Purely the documented VIA/QMK path — no firmware, no proprietary protocol.
+
 **How we plan to actually drive the LEDs** — three ranked paths (VIA raw-HID with no reflash, sniff-and-replay the app's protocol, or reflash the open-source QMK firmware), with effort/risk/reversibility for each, are worked out in **[`docs/LED-STRATEGY.md`](docs/LED-STRATEGY.md)**. Short version: the chassis is an open, VIA-capable, RP2040-based Work Louder Creator Micro 2, so the *hardware* supports every path — only the Codex firmware profile's lockdown is unverified.
 
 ## Roadmap
 
-- [x] **M0 groundwork** — state engine, renderers, detector, CLI, tests
-- [ ] **M0 spike** — probe the physical pad, publish the capability report
+- [x] **M0 groundwork** — state engine, renderers, detector, write-test harness, CLI, tests
+- [ ] **M0 spike** — probe the physical pad (`detect` + `verify-leds`), publish the capability report
 - [ ] **M1** — finish the LED write for whatever path the pad supports
 - [ ] **M2** — ship the input layout (Work Louder Input + VIA)
 - [ ] **M3** — generalize to any agent × any VIA/QMK RGB pad; optional QMK keymap
