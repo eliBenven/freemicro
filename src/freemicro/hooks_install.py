@@ -12,6 +12,8 @@ hooks it didn't add, and is idempotent (running it twice is a no-op).
 from __future__ import annotations
 
 import json
+import shutil
+import sys
 from pathlib import Path
 
 # Events we hook and the fact that our single handler figures out the state
@@ -25,8 +27,26 @@ HOOK_EVENTS = (
     "SessionEnd",
 )
 
-HOOK_COMMAND = "freemicro hook"
 _MARKER = "freemicro"  # how we recognize our own entries for idempotency.
+
+
+def hook_command() -> str:
+    """The command Claude Code should run for each hook event.
+
+    Claude Code executes hooks with a minimal environment, so a bare
+    ``freemicro`` on ``PATH`` is not guaranteed to resolve. We therefore pin an
+    absolute path: the installed console script if we can find it, otherwise
+    ``<python> -m freemicro`` using the interpreter that ran the install. Both
+    still contain the ``freemicro`` marker, so idempotency detection works.
+    """
+    script = shutil.which("freemicro")
+    if script:
+        return f"{script} hook"
+    return f"{sys.executable} -m freemicro hook"
+
+
+# Kept for backwards compatibility / display; the installer uses hook_command().
+HOOK_COMMAND = "freemicro hook"
 
 
 def default_settings_path() -> Path:
@@ -36,7 +56,7 @@ def default_settings_path() -> Path:
 def _entry() -> dict:
     return {
         "hooks": [
-            {"type": "command", "command": HOOK_COMMAND}
+            {"type": "command", "command": hook_command()}
         ]
     }
 

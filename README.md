@@ -31,7 +31,7 @@ FreeMicro closes the gap. It reads **Claude Code's own lifecycle hooks**, normal
 
 ## ⚠️ Honest status (read before you get excited)
 
-FreeMicro is **pre-hardware**. The **state engine, renderer registry, screen + busylight renderers, detector, CLI, and 35 passing tests ship and work today.** What is **not yet verified** is the headline: whether the *shipping* Codex Micro exposes a writable channel so we can drive the *Agent Keys themselves*.
+FreeMicro is **pre-hardware**. The **state engine, renderer registry, screen + busylight renderers, detector, CLI, and 40 passing tests ship and work today** — the full hook → state → light loop runs right now (drive it with `freemicro demo`). What is **not yet verified** is the headline: whether the *shipping* Codex Micro exposes a writable channel so we can drive the *Agent Keys themselves*.
 
 That is the one open question the whole LED path hinges on, and launch coverage **contradicts itself** on it (see [`SPEC.md` §4](SPEC.md)). It gets answered the moment a physical unit is probed with `freemicro detect` — not before. Until then, the `micro-via` / `micro-qmk` renderers are **experimental**, and the **screen/busylight fallback carries the signal no matter what.** We'd rather ship an honest fallback than a promise we can't keep.
 
@@ -48,10 +48,11 @@ freemicro install
 freemicro watch
 ```
 
-Now use Claude Code as normal. The status flips to **blue** while it works, **amber** when it needs your approval, **green** when it's done, **red** on error. Try it without the agent:
+Now use Claude Code as normal. The status flips to **blue** while it works, **amber** when it needs your approval, **green** when it's done, **red** on error. Try the whole pipeline without the agent or any hardware:
 
 ```sh
-freemicro render waiting     # flash a state to whatever renderer is best
+freemicro demo               # play idle→working→waiting→done→error on the real renderer
+freemicro render waiting     # flash a single state to whatever renderer is best
 freemicro renderers          # see what's available on your machine
 freemicro status             # what all your sessions resolve to right now
 ```
@@ -128,7 +129,7 @@ FreeMicro gets better with every pad people test. The highest-value contribution
 ```sh
 git clone https://github.com/eliBenven/freemicro && cd freemicro
 pip install -e ".[dev,all]"
-pytest            # 35 tests, runs in well under a second
+pytest            # 40 tests, runs in well under a second
 ```
 
 ## License

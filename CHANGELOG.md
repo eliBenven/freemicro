@@ -14,14 +14,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   screen fallback that is always kept reachable.
 - **Detector** (`freemicro.detector`): read-only HID capability probe for
   Milestone 0.
-- **CLI** (`freemicro`): `detect`, `install`, `hook`, `watch`, `emit`,
-  `render`, `renderers`, `status`.
+- **CLI** (`freemicro`): `detect`, `install`, `hook`, `watch`, `demo`, `emit`,
+  `render`, `renderers`, `status`. Hooks are installed with an absolute
+  interpreter path so they resolve under Claude Code's minimal environment.
+- **`freemicro demo`**: plays the full state sequence on the real renderer so
+  the end-to-end loop is visible with no agent or hardware attached.
 - **Presets**: recommended Claude Code terminal layout (Work Louder Input) and
   a VIA skeleton.
 - **Firmware**: optional QMK keymap reference for per-key Agent-Key colours.
 - **Crowdsourced hardware DB** scaffold (`hardware/capabilities.json`).
-- Test suite (35 tests) covering the state engine, hook classifier, renderer
-  selection, hook installer, and detector.
+- Test suite (40 tests) covering the state engine, hook classifier, renderer
+  selection, hook installer, detector, and a full-session end-to-end pipeline
+  (hook events → store → resolved state).
 
 ### Not yet verified
 - Driving the **shipping Codex Micro's Agent Keys** — blocked on the Milestone 0

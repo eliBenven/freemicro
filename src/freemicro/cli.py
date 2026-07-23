@@ -177,6 +177,49 @@ def cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_demo(args: argparse.Namespace) -> int:
+    """Play the full state sequence on the real renderer(s).
+
+    Useful for eyeballing the whole pipeline — and for recording a demo —
+    without needing Claude Code or any hardware attached.
+    """
+    from freemicro.renderers import select
+
+    cfg = Config.load()
+    renderers = select(prefer=cfg.prefer)
+    sequence = [
+        AgentState.IDLE,
+        AgentState.WORKING,
+        AgentState.WAITING,
+        AgentState.WORKING,
+        AgentState.DONE,
+        AgentState.ERROR,
+        AgentState.IDLE,
+    ]
+    print(
+        f"freemicro demo — targets: {', '.join(r.name for r in renderers)} "
+        f"({args.step}s per state). Ctrl-C to stop."
+    )
+    try:
+        for _ in range(args.loops):
+            for state in sequence:
+                for r in renderers:
+                    r.render(state)
+                # Keep GUI renderers responsive across the dwell time.
+                slept = 0.0
+                while slept < args.step:
+                    for r in renderers:
+                        r.render(state)
+                    time.sleep(min(0.05, args.step))
+                    slept += min(0.05, args.step)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for r in renderers:
+            r.close()
+    return 0
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     from freemicro.renderers import select
 
@@ -252,6 +295,11 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("watch", help="run the renderer loop")
     w.add_argument("--interval", type=float, default=0.25, help="poll seconds")
     w.set_defaults(func=cmd_watch)
+
+    dm = sub.add_parser("demo", help="play the full state sequence (no agent/hw needed)")
+    dm.add_argument("--step", type=float, default=1.5, help="seconds per state")
+    dm.add_argument("--loops", type=int, default=1, help="how many times to cycle")
+    dm.set_defaults(func=cmd_demo)
 
     return p
 
