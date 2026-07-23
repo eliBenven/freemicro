@@ -80,6 +80,15 @@ works" does **not** guarantee "the VIA lighting command drives the *Agent
 Keys*" — those LEDs are pushed by the desktop app and may sit on a separate
 channel. Confirm with a write test, not just enumeration.
 
+**Research update:** the chassis is a Work Louder Creator Micro 2, which is
+VIA-capable with open QMK firmware in the upstream tree, on an RP2040 with an
+unbrickable UF2 bootloader. So the *hardware* supports every path we need; only
+the *Codex firmware profile's* lockdown is unknown. Three concrete ways to drive
+the Agent Keys — VIA raw-HID (no reflash), sniff-and-replay the app's protocol,
+or reflash open QMK — are analyzed and ranked in
+[`docs/LED-STRATEGY.md`](docs/LED-STRATEGY.md), including the policy decision on
+whether to relax the reverse-engineering non-goal for the sniff path.
+
 ## 5. Architecture
 
 Four decoupled layers. State and input are solved; the renderer is the work.

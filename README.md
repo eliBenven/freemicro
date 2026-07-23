@@ -113,6 +113,8 @@ freemicro detect --json     # paste this into a Hardware Report issue
 
 It's **read-only** — it enumerates HID interfaces, flags a `0xFF60` writable channel, and prints VID/PID. Publishing that report is a genuine community first. Results feed [`hardware/capabilities.json`](hardware/capabilities.json).
 
+**How we plan to actually drive the LEDs** — three ranked paths (VIA raw-HID with no reflash, sniff-and-replay the app's protocol, or reflash the open-source QMK firmware), with effort/risk/reversibility for each, are worked out in **[`docs/LED-STRATEGY.md`](docs/LED-STRATEGY.md)**. Short version: the chassis is an open, VIA-capable, RP2040-based Work Louder Creator Micro 2, so the *hardware* supports every path — only the Codex firmware profile's lockdown is unverified.
+
 ## Roadmap
 
 - [x] **M0 groundwork** — state engine, renderers, detector, CLI, tests
