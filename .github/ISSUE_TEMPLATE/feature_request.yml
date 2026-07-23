@@ -1,0 +1,24 @@
+name: "💡 Feature request"
+description: "Suggest a renderer, an agent harness, or a workflow."
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem or use case?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - New renderer (hardware target)
+        - New agent harness (Codex CLI, Cursor, ...)
+        - Input layout / preset
+        - State engine
+        - Other

@@ -1,0 +1,30 @@
+name: "🐛 Bug report"
+description: "Something isn't working as documented."
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. freemicro install
+        2. freemicro watch
+        3. ...
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: "OS, Python version, `freemicro --version`, and which renderer(s) were selected (`freemicro renderers`)."
+      render: shell
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      render: shell

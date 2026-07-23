@@ -1,0 +1,24 @@
+{
+  "_comment": "Crowdsourced hardware-capability database. One entry per firmware revision of a pad, keyed by VID:PID. Submit yours via the Hardware Report issue template (paste `freemicro detect --json`). Fields marked null are UNVERIFIED and awaiting a physical probe (Milestone 0).",
+  "schemaVersion": 1,
+  "devices": [
+    {
+      "name": "OpenAI Codex Micro (Work Louder Creator Micro 2)",
+      "aliases": ["Codex Micro", "CM2"],
+      "vendorId": null,
+      "productId": null,
+      "firmwareRevision": "shipping-2026-07",
+      "hasRawHid": null,
+      "rawUsagePage": null,
+      "viaWritable": null,
+      "ledsPerKeyAddressable": null,
+      "agentKeysDrivable": null,
+      "bootloaderOpen": null,
+      "requiresChatgptAppQuit": null,
+      "recommendedRenderer": null,
+      "notes": "UNVERIFIED. The entire LED path hinges on these answers (SPEC §4). Launch coverage conflicts: some report VIA-capable real-time remap; Work Louder is quoted saying CM2 uses proprietary Input, not QMK/VIA. Run `freemicro detect --json` on the physical unit and open a Hardware Report.",
+      "reportedBy": [],
+      "lastVerified": null
+    }
+  ]
+}

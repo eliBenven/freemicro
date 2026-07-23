@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "freemicro"
+version = "0.1.0"
+description = "Turn a macro pad into a live status light for Claude Code and any coding agent — drive the OpenAI Codex Micro's Agent-Key LEDs, VIA/QMK RGB pads, busylights, or your screen."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Eli Benveniste" }]
+keywords = [
+    "claude-code", "codex", "macropad", "qmk", "via", "hid", "rgb",
+    "coding-agents", "developer-tools", "ambient-computing", "status-light",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: User Interfaces",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+[project.optional-dependencies]
+detect = ["hidapi>=0.14"]
+busylight = ["busylight-core>=0.10"]
+all = ["hidapi>=0.14", "busylight-core>=0.10"]
+dev = ["pytest>=7", "pytest-cov", "ruff"]
+
+[project.scripts]
+freemicro = "freemicro.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/eliBenven/freemicro"
+Repository = "https://github.com/eliBenven/freemicro"
+Issues = "https://github.com/eliBenven/freemicro/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/freemicro"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"

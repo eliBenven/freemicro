@@ -1,0 +1,48 @@
+name: "🔌 Hardware Report"
+description: "Share a `freemicro detect` capability report for your pad. This is the single most useful contribution."
+title: "[Hardware] <device name> — VID:PID"
+labels: ["hardware-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! This directly advances the project and grows the crowdsourced
+        capability database. The probe is **read-only** — it never writes to
+        your device.
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      placeholder: "OpenAI Codex Micro / Work Louder Creator Micro 2 / other pad"
+    validations:
+      required: true
+  - type: textarea
+    id: detect
+    attributes:
+      label: "`freemicro detect --json` output"
+      description: "Run `pip install \"freemicro[detect]\"` then `freemicro detect --json` and paste the full output."
+      render: json
+    validations:
+      required: true
+  - type: dropdown
+    id: raw_channel
+    attributes:
+      label: Raw 0xFF60 channel present?
+      options: ["yes", "no", "not sure"]
+    validations:
+      required: true
+  - type: dropdown
+    id: via
+    attributes:
+      label: Does usevia.app / Vial detect the pad?
+      options: ["yes — writable", "detected but read-only", "no", "did not try"]
+  - type: textarea
+    id: led_write
+    attributes:
+      label: "Did `freemicro render done` actually move the Agent-Key LEDs?"
+      description: "If you tried the write path, tell us what happened. Global colour vs per-key? Did you have to quit the ChatGPT desktop app first?"
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware / purchase date
+      placeholder: "shipping 2026-07, bought 2026-07-23"
