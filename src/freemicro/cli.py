@@ -331,6 +331,34 @@ def cmd_start(args: argparse.Namespace) -> int:
     return onboarding.run(args)
 
 
+#: Cap for ``$FREEMICRO_HOOK_LOG`` before it rotates. Every Claude Code turn
+#: appends a full payload, so an always-on log grows without bound: it reached
+#: 31 MB on the developer's own machine. At rotation the file becomes ``.1``
+#: (replacing any previous ``.1``), so total on disk is bounded by twice this
+#: and the most recent traffic is always kept. 5 MB holds thousands of events,
+#: which is far more than anyone auditing the mapping needs to scroll back
+#: through.
+HOOK_LOG_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _rotate_hook_log(path: str) -> None:
+    """Roll ``path`` to ``path.1`` once it passes the cap. Never raises.
+
+    One generation, not many: this is a debugging aid, not an audit trail, so
+    keeping the last two windows is enough and a numbered ladder would just be
+    more code that can leave files behind after an uninstall.
+    """
+    try:
+        if os.path.getsize(path) < HOOK_LOG_MAX_BYTES:
+            return
+    except OSError:
+        return
+    try:
+        os.replace(path, path + ".1")
+    except OSError:
+        pass
+
+
 def _log_raw_event(event: dict, state) -> None:
     """Append one raw hook payload to ``$FREEMICRO_HOOK_LOG``, if set.
 
@@ -341,11 +369,16 @@ def _log_raw_event(event: dict, state) -> None:
     mapping against events you have never looked at, so this makes the real
     traffic observable. Off unless the variable is set; never raises, because
     nothing here may break the user's agent.
+
+    The file is size-capped (:data:`HOOK_LOG_MAX_BYTES`): left uncapped, one
+    line per turn grows without bound, and this is the file `freemicro
+    uninstall` had to sweep at 31 MB.
     """
     path = os.environ.get("FREEMICRO_HOOK_LOG")
     if not path:
         return
     try:
+        _rotate_hook_log(path)
         record = {
             "at": time.time(),
             "event": event.get("hook_event_name"),
