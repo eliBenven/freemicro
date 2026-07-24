@@ -4,12 +4,9 @@ All notable changes to FreeMicro are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> **Nothing has been released yet.** Everything below is the content of the
-> first public release, `0.1.0`, and stays under *Unreleased* until that tag
-> exists - a changelog that claims a version nobody can install is the first
-> thing that makes a project untrustworthy.
+## [0.1.0] - 2026-07-24
 
-## [Unreleased]
+First public release.
 
 The arc of this release, honestly: FreeMicro began as a state engine and a
 renderer registry with **no way to drive the actual pad**. The Codex Micro's
@@ -262,4 +259,4 @@ The layers that predate the hardware work, and are still the backbone:
 - **There is no preset trust check yet.** A config you did not write is a
   program you did not read - see `docs/SECURITY-MODEL.md`.
 
-[Unreleased]: https://github.com/eliBenven/freemicro/compare/main...HEAD
+[0.1.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.0
