@@ -65,7 +65,7 @@ from freemicro.padconfig import DEFAULT_CONFIG_PATH, PadConfig, PadConfigError
 BACKUP_SUFFIX = ".bak"
 
 #: Binding fields that must end up as JSON booleans, whatever the browser sent.
-_BOOL_FIELDS = frozenset({"submit", "wait", "cycle", "absolute"})
+_BOOL_FIELDS = frozenset({"submit", "wait", "cycle", "absolute", "latch"})
 
 #: Binding fields that must end up as JSON numbers.
 _NUMBER_FIELDS = frozenset({"x", "y", "count"})

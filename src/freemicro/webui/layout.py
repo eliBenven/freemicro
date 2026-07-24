@@ -333,6 +333,11 @@ FIELD_HINTS: Dict[str, Dict[str, Any]] = {
     "text": {"widget": "textarea", "placeholder": "/resume"},
     "submit": {"widget": "boolean", "help": "Press Return afterwards"},
     "key": {"widget": "combo", "placeholder": "cmd+shift+k"},
+    "latch": {
+        "widget": "boolean",
+        "help": "For a TOGGLE dictation app: tap-tap keeps recording, tap again "
+                "stops. Leave off for a push-to-talk app that records while held.",
+    },
     "command": {"widget": "textarea", "placeholder": "gh pr create --fill"},
     "cwd": {"widget": "text", "placeholder": "~/code/project"},
     "wait": {"widget": "boolean", "help": "Block until the command exits"},

@@ -258,6 +258,34 @@ def test_a_session_that_starts_then_works_still_goes_to_working(monkeypatch):
     assert _sessions()["s4"].state == AgentState.WORKING
 
 
+def test_a_hook_that_cannot_write_its_state_fails_invisibly(monkeypatch, capsys):
+    """A full or read-only ``~/.freemicro`` must not raise into Claude Code: the
+    hook runs inside the agent's own execution, so a traceback or a nonzero exit
+    would surface on every turn. It must return 0 and print no traceback."""
+    def broken_store(cfg):
+        raise OSError("disk is full")
+
+    monkeypatch.setattr(cli, "_store", broken_store)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
+        {"hook_event_name": "UserPromptSubmit", "session_id": "s9"}
+    )))
+    assert cli.cmd_hook(Namespace()) == 0
+    err = capsys.readouterr().err
+    assert "Traceback" not in err          # never a stack trace
+    assert "disk is full" in err           # one plain diagnostic line is fine
+
+
+def test_a_hook_with_unreadable_config_still_returns_zero(monkeypatch):
+    def broken_config():
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(cli.Config, "load", staticmethod(broken_config))
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
+        {"hook_event_name": "Stop", "session_id": "s10"}
+    )))
+    assert cli.cmd_hook(Namespace()) == 0
+
+
 # ---------------------------------------------------------------------------
 # What `keys --list` tells you
 # ---------------------------------------------------------------------------

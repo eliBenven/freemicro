@@ -59,9 +59,11 @@ from freemicro.input.actions import (
     Action,
     ActionError,
     Backend,
+    is_latching,
     perform,
     release,
 )
+from freemicro.input import latch as latchmod
 from freemicro.input.pointer import Pointer, PointerVector
 from freemicro.padconfig import (
     ENCODER_TICKS,
@@ -166,12 +168,14 @@ class SettleTimer:
         sleep: Optional[Callable[[float], None]] = None,
         autostart: bool = True,
         idle_seconds: float = 0.5,
+        name: str = "freemicro-chord",
     ) -> None:
         self.on_expire = on_expire
         self.clock = clock or _monotonic
         self.sleep = sleep if sleep is not None else self._wait
         self.autostart = autostart
         self.idle_seconds = idle_seconds
+        self.name = name
         self.error: Optional[BaseException] = None
         self._deadline: Optional[float] = None
         self._wake = threading.Event()
@@ -211,7 +215,7 @@ class SettleTimer:
         self._stop.clear()
         self.error = None
         thread = threading.Thread(
-            target=self._run, name="freemicro-chord", daemon=True
+            target=self._run, name=self.name, daemon=True
         )
         self._thread = thread
         atexit.register(self.stop)
@@ -255,6 +259,20 @@ class SettleTimer:
                 # A backend that cannot deliver at all must not spin forever.
                 self.error = exc
                 return
+
+
+@dataclass
+class _Latch:
+    """One latching MIC key: its state machine and the binding driving it.
+
+    The action is kept alongside the machine so the timer thread can re-send the
+    toggle tap and re-assert the light without another config lookup, and so a
+    config reload replaces the pair wholesale rather than leaving a machine
+    pointed at a binding the user just deleted.
+    """
+
+    machine: "latchmod.LatchMachine"
+    action: Action
 
 
 @dataclass
@@ -386,8 +404,23 @@ class Bridge:
         self._open_chords: Dict[Tuple[str, ...], Action] = {}
         #: Dispatches produced by the settle timer, awaiting a reader.
         self._deferred: List[Dispatch] = []
+        #: input id -> its push-to-talk latch machine and binding. Empty unless
+        #: a ``hold`` binding opted into ``latch``. See :mod:`freemicro.input.latch`.
+        self._latch: Dict[str, _Latch] = {}
+        #: When the latch timer should next re-assert a still-recording light,
+        #: or ``None``. Kept apart from the machines' own window deadlines: a
+        #: latch records indefinitely, but the activity overlay times a light out
+        #: from the clock, so a live latch has to keep saying it is live.
+        self._latch_refresh_at: Optional[float] = None
         self.settle = SettleTimer(
             self._expire, clock=self.clock, sleep=sleep, autostart=autostart
+        )
+        #: A second timer, mirroring ``settle``, for the latch machine's 350 ms
+        #: waiting and suppressing windows and the light refresh. Separate so the
+        #: chord settle path stays exactly as it was.
+        self.latch_timer = SettleTimer(
+            self._latch_expire, clock=self.clock, sleep=sleep,
+            autostart=autostart, name="freemicro-latch",
         )
         self.config = config  # via the setter: builds the chord index
         self._joystick = JoystickTracker(config.joystick)
@@ -414,6 +447,11 @@ class Bridge:
         deleted. Dropping them is the only coherent answer, and the keys are
         physically down anyway, so the next press re-establishes the truth.
         """
+        # A latch left running under the old file would keep a dictation app
+        # recording under a binding that may no longer exist. Stop it first, on
+        # the old action, so the app gets its toggle-off tap while the key that
+        # sends it is still the one the user configured.
+        self.stop_latches("config reloaded")
         self._config = config
         self._chord_keys = frozenset(
             member for members in config.chords for member in members
@@ -463,7 +501,13 @@ class Bridge:
         Any activity light goes with them, and for the same reason: the moment
         we can no longer say a key is down is the moment the pad must stop
         claiming it.
+
+        A latching push-to-talk holds nothing physically, but it does leave a
+        dictation app recording, which is the same kind of debt: stopped here
+        too, so every path that lets go of the keys also stops the recording and
+        clears its light. See :meth:`stop_latches`.
         """
+        self.stop_latches("released")
         self.release_lights()
         with self._lock:
             self._holding.clear()
@@ -486,6 +530,7 @@ class Bridge:
         way out is the one outcome nobody asked for.
         """
         self.settle.stop()
+        self.latch_timer.stop()
         with self._lock:
             self._unresolved.clear()
             self._chorded.clear()
@@ -621,6 +666,11 @@ class Bridge:
         self, input_id: str, action: Optional[Action], pressed: bool
     ) -> Optional[Dispatch]:
         """Deliver one resolved binding. ``input_id`` may be a chord id."""
+        if is_latching(action):
+            # Routed before everything below so a plain hold stays byte-identical:
+            # a latching hold never presses a real modifier, never registers in
+            # ``_holding`` and never suppresses another key. See _run_latch.
+            return self._run_latch(input_id, action, pressed)
         if not pressed:
             # Before the suppression check, not after: a press we refused never
             # lit anything, so this is a no-op there, and a press we *did*
@@ -701,6 +751,182 @@ class Bridge:
             return None
         held_id, held = next(iter(self._holding.items()))
         return (held_id, str(held.params.get("key", "")))
+
+    # -- push-to-talk latch ----------------------------------------------
+
+    def _run_latch(
+        self, input_id: str, action: Action, pressed: bool
+    ) -> Optional[Dispatch]:
+        """Advance one MIC key's latch machine and deliver what it asks for.
+
+        The machine is the authority on whether recording is on; this only turns
+        its ``start`` / ``stop`` into a tap of the toggle shortcut and the light
+        on or off, and points the timer at the machine's next window.
+        """
+        now = self.clock()
+        with self._lock:
+            entry = self._latch.get(input_id)
+            if entry is None:
+                entry = self._latch[input_id] = _Latch(
+                    latchmod.LatchMachine(), action
+                )
+            else:
+                # Same binding object every event, but a reload could not have
+                # swapped it without clearing the machine, so refresh defensively.
+                entry.action = action
+            machine = entry.machine
+            if pressed:
+                blocker = self._blocking_hold(action)
+                if blocker is not None:
+                    # Another key is physically holding modifiers, so a tap now
+                    # would come out as a shortcut. Refuse it, and swallow the
+                    # matching release, exactly as a normal press would be. The
+                    # machine does not advance: nothing was sent.
+                    self._suppressed[input_id] = True
+            else:
+                blocker = None
+
+        if pressed and blocker is not None:
+            return Dispatch(
+                input_id=input_id, action=action,
+                suppressed_by=blocker[0], holding=blocker[1],
+            )
+        if not pressed:
+            with self._lock:
+                if self._suppressed.pop(input_id, False):
+                    return None
+
+        emits = machine.press(now) if pressed else machine.release(now)
+        dispatch = self._apply_latch(input_id, action, emits)
+        with self._lock:
+            self._reschedule_latch(now)
+        return dispatch
+
+    def _apply_latch(
+        self, input_id: str, action: Action, emits: List[str]
+    ) -> Dispatch:
+        """Turn the machine's emits into a toggle tap and a light change."""
+        dispatch = Dispatch(input_id=input_id, action=action)
+        for emit in emits:
+            if emit == latchmod.START and action.light is not None:
+                # Before the tap, as ``_holding`` and the hold light are: it says
+                # recording is starting, and a tap that fails still has to be
+                # something the pad stops claiming.
+                with self._lock:
+                    self._lit[input_id] = True
+                self._light(input_id, action.light)
+            try:
+                with self._deliver:
+                    self.backend.press_key(str(action.params["key"]))
+            except ActionError as exc:
+                dispatch = Dispatch(
+                    input_id=input_id, action=action, ok=False, error=str(exc)
+                )
+                if emit == latchmod.START:
+                    self._end_light(input_id)
+            if emit == latchmod.STOP:
+                # Recording is over whether or not the tap landed, so the pad
+                # must stop saying it is on.
+                self._end_light(input_id)
+        return dispatch
+
+    def _latch_refresh_interval(self) -> Optional[float]:
+        """How long the latch timer may sleep before re-asserting a live light.
+
+        Half the light's own timeout, so the overlay never reaches its deadline
+        while a latch is genuinely recording. ``None`` when nothing recording
+        carries a light, which is the signal to stop refreshing. Caller holds
+        the lock.
+        """
+        intervals = []
+        for entry in self._latch.values():
+            if entry.machine.recording and entry.action.light is not None:
+                timeout = float(
+                    getattr(entry.action.light, "timeout_seconds", 0.0) or 0.0
+                )
+                intervals.append(max(1.0, timeout * 0.5) if timeout > 0 else 30.0)
+        return min(intervals) if intervals else None
+
+    def _reschedule_latch(self, now: float) -> None:
+        """Point the latch timer at the earliest thing it owes. Holds the lock."""
+        interval = self._latch_refresh_interval()
+        if interval is None:
+            self._latch_refresh_at = None
+        elif self._latch_refresh_at is None:
+            self._latch_refresh_at = now + interval
+        deadlines = [
+            e.machine.deadline for e in self._latch.values()
+            if e.machine.deadline is not None
+        ]
+        if self._latch_refresh_at is not None:
+            deadlines.append(self._latch_refresh_at)
+        self.latch_timer.schedule(min(deadlines) if deadlines else None)
+
+    def _latch_expire(self) -> None:
+        """The latch timer fired: resolve due windows and refresh live lights.
+
+        Runs on the timer thread, the same shape as :meth:`_expire`: a ``stop``
+        the clock produced (a waiting window that timed out) is delivered through
+        ``on_dispatch`` or queued for the next :meth:`drain`, so the readout
+        names it when it happens rather than when the next key does.
+        """
+        now = self.clock()
+        with self._lock:
+            entries = list(self._latch.items())
+            refresh_due = (
+                self._latch_refresh_at is not None
+                and now >= self._latch_refresh_at
+            )
+        produced: List[Dispatch] = []
+        for input_id, entry in entries:
+            deadline = entry.machine.deadline
+            if deadline is not None and now >= deadline:
+                emits = entry.machine.tick(now)
+                dispatch = self._apply_latch(input_id, entry.action, emits)
+                if emits:
+                    produced.append(dispatch)
+        if refresh_due:
+            with self._lock:
+                self._latch_refresh_at = None  # _reschedule_latch sets the next
+            for input_id, entry in entries:
+                if entry.machine.recording and entry.action.light is not None:
+                    with self._lock:
+                        self._lit[input_id] = True
+                    self._light(input_id, entry.action.light)
+        with self._lock:
+            self._reschedule_latch(now)
+        for dispatch in produced:
+            if self.on_dispatch is not None:
+                self.on_dispatch(dispatch)
+            else:
+                with self._lock:
+                    self._deferred.append(dispatch)
+
+    def stop_latches(self, reason: str = "") -> List[Dispatch]:
+        """Force every latch back to idle now. Returns the stops sent. Never raises.
+
+        The recording machine's answer to a lost release, and the counterpart of
+        :meth:`release_held_keys` for holds: a pad that drops, a config reload or
+        shutdown must not leave a dictation app recording forever. Each machine
+        that was recording gets one toggle-off tap so the app actually stops, and
+        its light is retired. Called from :meth:`release_held_keys`,
+        :meth:`close` and the config setter, and by the run loop the instant it
+        knows the pad disconnected.
+        """
+        now = self.clock()
+        with self._lock:
+            entries = list(self._latch.items())
+        produced: List[Dispatch] = []
+        for input_id, entry in entries:
+            emits = entry.machine.force_stop(now)
+            dispatch = self._apply_latch(input_id, entry.action, emits)
+            if emits:
+                produced.append(dispatch)
+        with self._lock:
+            self._latch.clear()
+            self._latch_refresh_at = None
+        self.latch_timer.schedule(None)
+        return produced
 
     # -- two keys at once -------------------------------------------------
 

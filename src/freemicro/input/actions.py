@@ -810,18 +810,66 @@ def _release_hold(act: Action, backend: Backend) -> None:
     backend.hold_key(str(act.params["key"]), False)
 
 
+def _latch_flag(params: Mapping[str, Any]) -> bool:
+    """Whether this ``hold`` binding runs the push-to-talk latch machine.
+
+    ``latch: true`` changes the delivery contract, not just the gesture: a plain
+    hold presses real modifier keys and records *while held*, for a dictation
+    app whose shortcut is push-to-talk; a latching hold *taps* that shortcut to
+    start and again to stop, for an app whose shortcut *toggles* recording, and
+    it is that toggle contract - nothing held down - that makes latching (and an
+    honest light across it) possible at all. See :mod:`freemicro.input.latch`.
+    """
+    return bool(params.get("latch"))
+
+
+def _check_hold(params: Mapping[str, Any]) -> None:
+    _check_key_combo(params)
+    latch = params.get("latch")
+    if latch is not None and not isinstance(latch, bool):
+        raise ValueError(f"'latch' must be true or false, got {latch!r}")
+
+
+def _describe_hold(act: Action) -> str:
+    key = act.params.get("key")
+    if _latch_flag(act.params):
+        return f"tap {key} to record; tap-tap to keep recording, tap again to stop"
+    return f"hold {key} while pressed"
+
+
+def is_latching(action: Optional[Action]) -> bool:
+    """Whether this resolved binding is a latching (toggle) push-to-talk hold.
+
+    The one predicate the bridge consults to route a binding to the latch
+    machine instead of the physical hold-key path. Kept here, next to the kind
+    it is a property of, rather than as a string test scattered through the
+    bridge.
+    """
+    return (
+        action is not None
+        and action.kind == "hold"
+        and _latch_flag(action.params)
+    )
+
+
 @action(
     "hold",
-    summary="Hold a key down while the pad key is held (true push-to-talk).",
+    summary="Hold a key down while the pad key is held (true push-to-talk); "
+            "add latch=true for a toggle app: tap-tap keeps recording.",
     required=("key",),
-    describe=lambda act: f"hold {act.params.get('key')} while pressed",
-    check=_check_key_combo,
+    optional=("latch",),
+    describe=_describe_hold,
+    check=_check_hold,
     on_release=_release_hold,
     holds_keys=True,
 )
 def _run_hold(act: Action, backend: Backend) -> None:
     # Pressing alone would leave the key stuck, so the bridge routes this kind
     # specially: down on press, up on release. Reaching here means a press.
+    #
+    # A latching hold never reaches here: the bridge intercepts it before the
+    # hold-key path (see freemicro.input.latch), so this stays byte-identical
+    # for a plain hold whether or not the latch option exists on the kind.
     backend.hold_key(str(act.params["key"]), True)
 
 
@@ -944,6 +992,7 @@ __all__ = [
     "action",
     "action_help",
     "best_backend",
+    "is_latching",
     "perform",
     "release",
     "validate_params",

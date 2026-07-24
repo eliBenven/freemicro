@@ -785,6 +785,19 @@ def _parse_binding(input_id: str, raw: Any) -> Action:
         validate_params(kind, params)
     except ValueError as exc:
         raise PadConfigError(f"binding for {input_id!r}: {exc}") from exc
+    if kind == "hold" and params.get("latch"):
+        # The latch machine needs a release to time the tap-tap window, and
+        # these inputs report one event and never a key-up - the same reason
+        # they cannot carry a "light". Refused at load time, not left to fail
+        # silently the first time the key is pressed.
+        members = parse_chord_id(input_id) if is_chord_id(input_id) else (input_id,)
+        momentary = [m for m in members if m in _MOMENTARY_INPUTS]
+        if momentary:
+            raise PadConfigError(
+                f"binding {input_id!r} cannot latch: {', '.join(momentary)} "
+                "report one event and no release, so the tap-tap window could "
+                "never resolve. Latch belongs on an input you can hold."
+            )
     light = (
         _parse_activity_light(input_id, raw["light"]) if "light" in raw else None
     )

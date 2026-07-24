@@ -49,7 +49,7 @@ press it - the id is printed.
 "bindings": {
   "AG00": { "action": "focus_session", "label": "agent 1" },
   "ACT09": { "action": "text", "text": "continue", "submit": true, "label": "play" },
-  "ACT10": { "action": "hold", "key": "ctrl+option+cmd+d", "label": "mic" },
+  "ACT10": { "action": "hold", "key": "ctrl+cmd+o", "label": "mic" },
   "ACT12": { "action": "app",  "name": "Terminal", "cycle": true, "label": "term" },
   "AG05":  { "action": "none" },
   "AG04":  "/review"
@@ -67,7 +67,7 @@ of lines) and is ignored by the loader; `light` is
 |---|---|---|---|
 | `text` | `text` | `submit` | Types the text. `submit: true` presses Return after. |
 | `key` | `key` | - | Presses a keystroke. |
-| `hold` | `key` | - | Holds the key down for as long as you hold the pad key. True push-to-talk. |
+| `hold` | `key` | `latch` | Holds the key down for as long as you hold the pad key. True push-to-talk. `latch: true` instead taps the key (for a toggle app): tap-tap keeps recording, tap again stops. See [the mic key](#the-mic-key--push-to-talk). |
 | `shell` | `command` | `cwd`, `wait` | Runs a shell command. Fire-and-forget unless `wait: true`. |
 | `applescript` | `script` | - | Runs arbitrary AppleScript. The escape hatch. |
 | `app` | `name` | `cycle` | Focuses an app. `cycle: true` cycles its windows if it's already frontmost. |
@@ -184,24 +184,44 @@ It is then loadable from config, validated, listed by `--list`, and covered by
 it on yours. The shipped default puts a dictation shortcut there:
 
 ```json
-"ACT11": { "action": "key", "key": "ctrl+option+cmd+d", "label": "mic - dictation" }
+"ACT11": { "action": "key", "key": "ctrl+cmd+o", "label": "mic - dictation" }
 ```
 
 Assign that **same** shortcut inside your dictation app and the key toggles it:
 
 * **Wispr Flow** → Settings → Shortcuts → set the toggle-dictation hotkey to
-  `Ctrl+Option+Cmd+D`. Nothing collides with that combo by default.
+  `Ctrl+Cmd+O`. Keep it to **three keys or fewer**: Wispr Flow silently ignores
+  a hotkey longer than that, so a four-key combo like `Ctrl+Option+Cmd+D` never
+  registers and the mic looks dead. (This is the shipped default's combo for
+  exactly that reason.)
 * Any other dictation tool with a configurable hotkey works the same way.
 
-For **true push-and-hold**, use the `hold` action instead:
+For **true push-and-hold** (the app records while the shortcut is held), use the
+`hold` action instead:
 
 ```json
-"ACT11": { "action": "hold", "key": "ctrl+option+cmd+d", "label": "talk" }
+"ACT11": { "action": "hold", "key": "ctrl+cmd+o", "label": "talk" }
 ```
 
 The pad reports release as well as press, so FreeMicro presses the key when you
 press the pad key and releases it when you let go. (This needs the CGEvent
 backend; AppleScript's `keystroke` is press-and-release in one go.)
+
+For an app whose shortcut **toggles** recording (tap to start, tap to stop), add
+`"latch": true`. You then get the vendor MIC's own behaviour: hold to talk and
+let go to stop, **or** tap the key twice quickly to latch recording on and tap
+once more to stop.
+
+```json
+"ACT11": { "action": "hold", "key": "ctrl+cmd+o", "latch": true, "label": "talk" }
+```
+
+A latch **taps** the shortcut rather than holding modifiers down, so nothing is
+held between the taps: other keys keep typing normally, and there is no
+stuck-modifier hazard even across a latch that lasts minutes. Every threshold is
+350 ms - the vendor's double-tap window ([`FACTORY-DEFAULTS.md`](FACTORY-DEFAULTS.md)
+§8). Latch needs the CGEvent backend and an input with a release, so it is a
+load error on the dial detents and joystick flicks.
 
 If you'd rather have the pad launch the app instead of toggling it, use a shell
 action: `{"action": "shell", "command": "open -a 'Wispr Flow'"}`.
@@ -284,29 +304,30 @@ from all five: the nearest is `done` `#00FF4C`, and `#2E8B57` is far darker,
 desaturated and blue-shifted, it lands on a **different physical surface**, and
 it *animates* where every state colour is solid.
 
-#### Toggle dictation cannot be lit honestly
+#### A toggle can be lit honestly - if FreeMicro drives it
 
-If your dictation app uses a **toggle** shortcut, FreeMicro sees the tap that
-starts recording and then sees nothing at all - the tap that stops it looks
-identical to the one that started it, and no message ever says "recording
-ended". So there is no moment at which the light could correctly go out.
+Watching a toggle from outside, FreeMicro cannot light it: it sees the tap that
+starts recording, but the tap that stops looks identical and no message ever
+says "recording ended", so there is no moment the light could correctly go out.
+Put a plain `light` on a non-`hold` binding and it lasts exactly as long as your
+finger - the config layer warns at load time, `freemicro keys --list` says so,
+and the web UI says so in the editor.
 
-The options were to guess with a timeout, or to not claim what we cannot know.
-A guess is wrong in both directions: too short and the pad goes dark while you
-are still talking, too long and it says you are recording after you have
-stopped. A microphone indicator that is wrong is worse than no indicator, so
-FreeMicro does not ship one.
+`latch: true` removes that limit by making FreeMicro the thing that taps. It runs
+the vendor state machine itself, so it always knows whether recording is on - a
+latched mic reports live for the whole latch and goes dark the instant the stop
+tap is sent, whether that stop came from your tap, the waiting window timing out,
+or the pad disconnecting. So the honest answer for a toggle dictation app is a
+**latching hold with a light**: `{"action": "hold", "key": "…", "latch": true,
+"light": {…}}`.
 
-A `light` on a non-`hold` binding is therefore allowed but lasts exactly as long
-as your finger, and the config layer warns at load time, `freemicro keys --list`
-says so, and the web UI says so in the editor. For dictation: use
-`{"action": "hold"}` and set your dictation app's **push-to-talk (hold)**
-shortcut to the same combo. That is one setting in the other app, and it buys
-you a light that is always right.
+For a push-to-talk (hold) app, a plain `{"action": "hold"}` with a light is
+still the simplest right answer: the release you feel is the release FreeMicro
+sees.
 
-Lights on `ENC_CW`, `ENC_CC` and the four `JOY_*` ids are a **load error**, not
-a warning: those report one event and no release, so nothing could ever turn
-the light off.
+Lights (and latches) on `ENC_CW`, `ENC_CC` and the four `JOY_*` ids are a **load
+error**, not a warning: those report one event and no release, so nothing could
+ever turn the light off or resolve the tap-tap window.
 
 ### While a `hold` key is down, the other keys stop typing
 
