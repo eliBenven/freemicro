@@ -119,6 +119,25 @@ def valid_tty(tty: str) -> bool:
 _TTY_CACHE: Dict[int, Tuple[float, str]] = {}
 _TTY_CACHE_SECONDS = 15.0
 
+#: A backstop cap on the cache. Entries expire after ``_TTY_CACHE_SECONDS`` but
+#: nothing removes an expired one on its own, so a daemon asked about a fresh pid
+#: every few minutes for months would grow the dict one entry at a time. When it
+#: crosses this many keys - which only happens if hundreds of *distinct* pids
+#: were asked about inside a single 15 s window, never in normal use - the
+#: already-expired entries are swept. A few hundred keeps the sweep rare while
+#: bounding the cache, and it never evicts an entry that is still valid.
+_TTY_CACHE_MAX = 512
+
+
+def _prune_tty_cache(now: float) -> None:
+    """Drop every entry whose expiry has already passed.
+
+    Called only when the cache has grown past :data:`_TTY_CACHE_MAX`, so its
+    cost is paid at most once per burst and never on the common path.
+    """
+    for pid in [p for p, (expires, _) in _TTY_CACHE.items() if expires <= now]:
+        del _TTY_CACHE[pid]
+
 
 def clear_tty_cache() -> None:
     """Forget every derived tty. For tests, and for anything long-running."""
@@ -146,6 +165,8 @@ def tty_from_pid(pid: int, *, lookup: Optional[Callable[[int], str]] = None) -> 
     except Exception:  # noqa: BLE001 - a key press must never raise
         found = ""
     found = found if valid_tty(found) else ""
+    if len(_TTY_CACHE) >= _TTY_CACHE_MAX:
+        _prune_tty_cache(now)
     _TTY_CACHE[key] = (now + _TTY_CACHE_SECONDS, found)
     return found
 

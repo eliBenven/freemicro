@@ -301,12 +301,12 @@ _CALLBACK = ctypes.CFUNCTYPE(
     ctypes.c_uint32, ctypes.POINTER(ctypes.c_ubyte), ctypes.c_long,
 )
 
-#: Strong references to every ctypes callback that is (or has been) scheduled on
-#: a run loop. Letting one be garbage collected while IOKit still holds the
-#: pointer is a hard segfault - and the pad *does* drop mid-callback, often.
-#: These objects are tiny and bounded by the number of streams a process opens,
-#: so we simply never release them.
-_LIVE_CALLBACKS: List[Any] = []
+#: A ctypes input-report callback must not be garbage collected while IOKit
+#: still holds its pointer - that is a hard segfault, and the pad *does* drop
+#: mid-callback, often. Rather than a fresh callback per stream pinned forever in
+#: a module-level list (which a daemon reopening the pad on every sleep/wake
+#: grows without bound), each :class:`Device` holds a single trampoline for its
+#: whole life and reuses it across streams. See :meth:`Device._ensure_callback`.
 
 
 class DeviceError(RuntimeError):
@@ -325,9 +325,15 @@ class Device:
         self._ref = ref
         self._closed = False
         self._decoder = FrameDecoder()
+        #: The one input-report trampoline this Device will ever register,
+        #: created on the first :meth:`stream` and reused by every stream after.
         self._callback: Any = None
+        #: The handler the trampoline dispatches to for the current stream.
+        self._on_event: Optional[Callable[[Dict[str, Any]], None]] = None
         self._inbuf: Any = None
         self._mode: Any = None
+        #: Whether the callback is registered on the run loop right now.
+        self._scheduled = False
         self._stop = False
         #: ``"USB"`` or ``"Bluetooth Low Energy"``, straight from IOKit.
         self.transport = transport
@@ -429,41 +435,30 @@ class Device:
         if self._closed:
             raise DeviceError("device is closed")
 
-        def _on_report(ctx, result, sender, rtype, rid, report, length):
-            # This runs on IOKit's callback stack. An exception escaping here
-            # crosses the ctypes boundary and takes the interpreter with it, so
-            # *nothing* in this function is allowed to raise.
-            try:
-                count = max(0, min(int(length), REPORT_BYTES + 1))
-                raw = bytes(bytearray(report[i] for i in range(count)))
-                messages = self._decoder.feed(raw)
-            except Exception:  # noqa: BLE001
-                return
-            for message in messages:
-                try:
-                    on_event(message)
-                except Exception:  # noqa: BLE001 - a bad handler must not kill the loop
-                    continue
-
-        # Keep strong references: ctypes will not, and a callback collected
-        # while IOKit still holds the pointer is a hard segfault - which this
-        # device provokes regularly by dropping off the bus mid-callback.
-        self._callback = _CALLBACK(_on_report)
-        _LIVE_CALLBACKS.append(self._callback)
-        self._inbuf = (ctypes.c_ubyte * (REPORT_BYTES + 1))()
-        self._mode = _cfstr("kCFRunLoopDefaultMode")
+        self._ensure_callback()
+        self._on_event = on_event
+        # One CFString per Device, created once and released in close(). A fresh
+        # one per stream leaked the previous string every time stream() ran
+        # twice on one handle - which request() does on every round trip.
+        if self._mode is None:
+            self._mode = _cfstr("kCFRunLoopDefaultMode")
         self._stop = False
 
+        # Marked scheduled *before* the register call so the finally always
+        # unwinds it, even if scheduling half-completes.
+        self._scheduled = True
         _iokit.IOHIDDeviceRegisterInputReportCallback(
             self._ref, self._inbuf, REPORT_BYTES + 1, self._callback, None
         )
         _iokit.IOHIDDeviceScheduleWithRunLoop(
             self._ref, _cf.CFRunLoopGetCurrent(), self._mode
         )
-        started = time.time()
+        # Monotonic: the ``seconds`` cutoff is an elapsed-time budget, so a
+        # backward wall-clock step must not stretch or cut short a read.
+        started = time.monotonic()
         try:
             while not self._stop and (
-                seconds <= 0 or (time.time() - started) < seconds
+                seconds <= 0 or (time.monotonic() - started) < seconds
             ):
                 _cf.CFRunLoopRunInMode(
                     self._mode, ctypes.c_double(tick_interval), False
@@ -473,14 +468,59 @@ class Device:
         finally:
             self._unschedule()
 
+    def _ensure_callback(self) -> None:
+        """Create the one input-report trampoline this Device will ever use.
+
+        A fresh ``_CALLBACK`` per :meth:`stream` was a slow leak: releasing one
+        while IOKit still holds its pointer is a hard segfault, so the old code
+        pinned every one in a module-level list forever, and a daemon reopening
+        the pad on every sleep/wake allocated another on each reconnect. Instead
+        there is a single trampoline per Device that dispatches to
+        ``self._on_event`` - whatever the current stream installed - so
+        re-streaming reuses the same object rather than allocating a new one.
+
+        Safe to reuse across register/unregister cycles: the C function pointer
+        is stable, and re-registering it is an ordinary IOKit call. And it is
+        never collected while IOKit holds it, because ``self._callback`` keeps it
+        alive for the Device's whole life while :meth:`_unschedule` (run from
+        :meth:`stream`'s ``finally`` and from :meth:`close`) removes the pointer
+        from IOKit before the Device can be dropped.
+        """
+        if self._callback is not None:
+            return
+
+        def _trampoline(ctx, result, sender, rtype, rid, report, length):
+            # This runs on IOKit's callback stack. An exception escaping here
+            # crosses the ctypes boundary and takes the interpreter with it, so
+            # *nothing* in this function is allowed to raise.
+            handler = self._on_event
+            if handler is None:
+                return
+            try:
+                count = max(0, min(int(length), REPORT_BYTES + 1))
+                raw = bytes(bytearray(report[i] for i in range(count)))
+                messages = self._decoder.feed(raw)
+            except Exception:  # noqa: BLE001
+                return
+            for message in messages:
+                try:
+                    handler(message)
+                except Exception:  # noqa: BLE001 - a bad handler must not kill the loop
+                    continue
+
+        self._callback = _CALLBACK(_trampoline)
+        self._inbuf = (ctypes.c_ubyte * (REPORT_BYTES + 1))()
+
     def _unschedule(self) -> None:
-        """Detach from the run loop before anything can be released.
+        """Detach from the run loop, keeping the callback for the next stream.
 
         Order matters: unregister the callback first, then unschedule. Dropping
         the device reference while IOKit still has our function pointer is the
-        crash we are avoiding, so we never clear ``_LIVE_CALLBACKS``.
+        crash we are avoiding. The trampoline is *not* released here - it lives
+        on ``self._callback`` for the life of the Device and is reused by the
+        next :meth:`stream`, so IOKit never holds a pointer to a freed object.
         """
-        if _iokit is None or _cf is None or self._closed or self._callback is None:
+        if _iokit is None or _cf is None or self._closed or not self._scheduled:
             return
         try:
             _iokit.IOHIDDeviceRegisterInputReportCallback(
@@ -491,7 +531,8 @@ class Device:
             )
         except Exception:  # pragma: no cover - teardown must never raise
             pass
-        self._callback = None
+        self._scheduled = False
+        self._on_event = None
 
     # -- lifecycle --------------------------------------------------------
 

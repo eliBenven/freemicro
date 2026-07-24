@@ -106,10 +106,17 @@ def run_with_reconnect(
 
     Presence is re-checked on every tick because IOKit will happily keep pumping
     a run loop for a device that is no longer there.
+
+    Every deadline and interval here is scheduled on :func:`time.monotonic`: the
+    run-duration cutoff and the once-a-second presence re-check are both pure
+    elapsed-time measurements, and a backward wall-clock correction must not be
+    able to make the loop run on past its ``seconds`` limit or skip its presence
+    check. Nothing here compares against a file mtime, so none of it needs wall
+    time.
     """
-    deadline = None if seconds <= 0 else time.time() + seconds
+    deadline = None if seconds <= 0 else time.monotonic() + seconds
     connected = False
-    while deadline is None or time.time() < deadline:
+    while deadline is None or time.monotonic() < deadline:
         device = shared_device()
         if device is None:
             if connected:
@@ -125,7 +132,7 @@ def run_with_reconnect(
                     on_tick()
                 time.sleep(tick_interval)
                 waited += tick_interval
-                if deadline is not None and time.time() >= deadline:
+                if deadline is not None and time.monotonic() >= deadline:
                     return
             continue
 
@@ -133,12 +140,12 @@ def run_with_reconnect(
         if on_connect is not None:
             on_connect(device)
 
-        last_check = [time.time()]
+        last_check = [time.monotonic()]
 
         def _tick() -> None:
             if on_tick is not None:
                 on_tick()
-            now = time.time()
+            now = time.monotonic()
             if now - last_check[0] >= 1.0:
                 last_check[0] = now
                 if not device_present():
@@ -155,7 +162,7 @@ def run_with_reconnect(
         # We only get here if the stream stopped: the pad went away, or we hit
         # the deadline. Drop the handle so the next pass opens a fresh one.
         close_shared()
-        if deadline is None or time.time() < deadline:
+        if deadline is None or time.monotonic() < deadline:
             if on_disconnect is not None:
                 on_disconnect()
             connected = False

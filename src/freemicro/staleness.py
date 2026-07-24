@@ -708,11 +708,15 @@ class ConfigWatcher:
         self,
         path: Optional[Path] = None,
         loader: Optional[Callable[[], Any]] = None,
-        clock: Callable[[], float] = time.time,
+        clock: Callable[[], float] = time.monotonic,
         interval: float = 1.0,
     ) -> None:
         self.path = Path(path) if path is not None else None
         self._loader = loader
+        # Monotonic: ``_next_check`` is a poll cadence, a pure duration. It never
+        # meets a file mtime - the change itself is caught by comparing the
+        # file's stamp against the last one (:meth:`_read_stamp`), not the clock
+        # - so a backward wall-clock step must not be able to stall the poll.
         self._clock = clock
         self._interval = interval
         self._next_check = clock()
@@ -815,10 +819,15 @@ RESTART_WINDOW = 600.0
 #: tree is how you turn an update into an outage.
 SETTLE_SECONDS = 2.0
 
-#: How often the watcher may walk the package directory. Not per tick - but
-#: often enough that "I just updated it" and "it picked that up" feel like the
-#: same moment, which is the whole point.
-CHECK_SECONDS = 2.0
+#: How often the watcher may walk the package directory. Not per tick - and not
+#: every couple of seconds either: the walk stats every file in the installed
+#: package (dozens of them), and it is polling for something that happens maybe
+#: once a week - a ``pip install -U``. At the old 2 s cadence an idle daemon ran
+#: this walk ~43,000 times a day for no change; at 30 s it is ~2,900, and the
+#: only cost is that a fresh update is noticed up to half a minute later, which
+#: against a human running ``pip install`` is imperceptible. ``SETTLE_SECONDS``
+#: still gates the restart itself, so a half-written tree is never acted on.
+CHECK_SECONDS = 30.0
 
 REASON_STALE_CODE = "stale-code"
 REASON_LOOP_GUARD = "loop-guard"
@@ -931,6 +940,7 @@ class CodeWatcher:
         started_at: Optional[float] = None,
         mtime: Callable[[], float] = package_mtime,
         clock: Callable[[], float] = time.time,
+        mono: Callable[[], float] = time.monotonic,
         verify: Callable[[], Tuple[bool, str]] = verify_new_code,
         exec_: Optional[Callable[[str, List[str]], Any]] = None,
         argv: Optional[List[str]] = None,
@@ -941,7 +951,15 @@ class CodeWatcher:
         max_restarts: int = MAX_RESTARTS,
         window: float = RESTART_WINDOW,
     ) -> None:
+        # Two clocks, on purpose. ``mono`` (monotonic) schedules the in-process
+        # intervals - the walk cadence and the settle window - so a backward
+        # wall-clock step cannot stall them. ``clock`` (wall) stays wall because
+        # the loop guard's timestamp is carried across ``execv`` in an env var
+        # (:meth:`history`), and only wall time is meaningful across a process
+        # replacement. The mtime comparisons below stay wall too, because an
+        # mtime is on the other side of them.
         self._clock = clock
+        self._mono = mono
         self._started = PROCESS_STARTED if started_at is None else started_at
         self._mtime = mtime
         self._verify = verify
@@ -954,7 +972,7 @@ class CodeWatcher:
         self._max_restarts = max_restarts
         self._window = window
 
-        self._next_check = self._clock()
+        self._next_check = self._mono()
         self._seen_mtime: Optional[float] = None
         self._seen_at = 0.0
         self._rejected: Optional[float] = None
@@ -971,18 +989,21 @@ class CodeWatcher:
         """Called once per render tick. ``None`` means nothing to say."""
         if self._decision is not None:
             return None  # decided once; never twice, never every tick
-        now = self._clock()
+        now = self._mono()
         if now < self._next_check:
             return None
         self._next_check = now + self._check_interval
 
         newest = self._mtime()
         if not newest or newest <= self._started + GRACE_SECONDS:
+            # Both sides wall: ``newest`` is a file mtime, ``_started`` a wall
+            # start time. This comparison must never move off wall time.
             self._seen_mtime = None
             return None
 
         if newest != self._seen_mtime:
-            # Still being written. Wait for it to hold still.
+            # Still being written. Wait for it to hold still. ``_seen_at`` is a
+            # monotonic reading, matched against the monotonic ``now`` below.
             self._seen_mtime, self._seen_at = newest, now
             return None
         if now - self._seen_at < self._settle:
@@ -990,8 +1011,11 @@ class CodeWatcher:
         if newest == self._rejected:
             return None  # already tried this tree and it did not import
 
+        # Loop guard on wall time: ``first_at`` is carried across ``execv`` and
+        # only wall time survives that, so it is compared against ``_clock()``,
+        # not the monotonic ``now`` used for scheduling above.
         restarts, first_at = self.history()
-        if restarts >= self._max_restarts and now - first_at < self._window:
+        if restarts >= self._max_restarts and self._clock() - first_at < self._window:
             self._decision = RestartDecision(
                 False,
                 REASON_LOOP_GUARD,

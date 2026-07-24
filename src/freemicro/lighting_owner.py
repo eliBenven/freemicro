@@ -577,6 +577,15 @@ class LightingOwner:
     Every clock read goes through ``clock`` and every process probe through
     ``vendor_probe``, so the whole thing is drivable from a test with a fake
     clock and a fake device.
+
+    ``clock`` defaults to :func:`time.monotonic`, not :func:`time.time`. Every
+    deadline it schedules - the quiet-window (``_last_input``), the probe
+    cadence (``_next_probe``) and the heartbeat (``_beat_at``) - is a duration,
+    and a backward wall-clock correction (an NTP step, a laptop waking to a
+    fixed clock) must never be able to push one into the future and freeze the
+    reasserter until real time catches up. Config-change detection reads the
+    file mtime against the *last* mtime (:meth:`_stamp`), never against the
+    clock, so nothing here needs wall time.
     """
 
     def __init__(
@@ -584,7 +593,7 @@ class LightingOwner:
         renderer: Any = None,
         config: Optional[PadConfig] = None,
         reassert: Optional[ReassertConfig] = None,
-        clock: Callable[[], float] = time.time,
+        clock: Callable[[], float] = time.monotonic,
         vendor_probe: Optional[Callable[[], bool]] = None,
         config_path: Optional[Path] = None,
         loader: Optional[Callable[[Optional[Path]], PadConfig]] = None,

@@ -416,6 +416,10 @@ def _watcher(clock, mtime, **kwargs):
     kwargs.setdefault("executable", "/usr/bin/python3")
     kwargs.setdefault("started_at", 900.0)
     kwargs.setdefault("check_interval", 0.0)
+    # The watcher schedules its walk on a monotonic clock and keeps a wall clock
+    # for the execv-persisted loop guard; the fake stands in for both, so
+    # advancing it moves scheduling and the guard's window together.
+    kwargs.setdefault("mono", clock)
     return staleness.CodeWatcher(clock=clock, mtime=mtime, **kwargs)
 
 

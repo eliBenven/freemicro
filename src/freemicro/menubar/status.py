@@ -108,10 +108,15 @@ def resolved_state() -> Tuple[AgentState, int]:
     config edit is picked up without a restart. That costs nothing it should
     not: the liveness probe is process-wide (:func:`default_liveness`), so the
     expensive half of "is that session still open?" is not re-paid per poll.
+
+    One scan, not two: :meth:`StateStore.resolved_and_sessions` reads the state
+    directory once and hands back both answers, where a bare
+    ``resolved_state()`` then ``sessions()`` walked and parsed every file twice
+    on every poll.
     """
     try:
-        store = default_store()
-        return store.resolved_state(), len(store.sessions())
+        state, sessions = default_store().resolved_and_sessions()
+        return state, len(sessions)
     except Exception:  # noqa: BLE001 - a broken store must not blank the menu
         return AgentState.IDLE, 0
 

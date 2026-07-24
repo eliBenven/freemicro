@@ -525,6 +525,16 @@ DEFAULT_IDENTITY_CACHE_SECONDS = 60.0
 #: own identity check.
 PID_START_TOLERANCE_SECONDS = 5.0
 
+#: A backstop cap on the two liveness caches. They key on pid, and a daemon that
+#: runs for months is asked about a great many distinct pids over its life. A
+#: live pid's entry is refreshed and a dead pid's is evicted, but a pid that dies
+#: while nobody is asking (its session already swept from disk) can leave an
+#: entry behind. When either dict grows past this many keys - which a normal
+#: machine never reaches, a handful of sessions sharing a handful of pids - the
+#: entries past their reuse window are swept. The size gate keeps the sweep free
+#: until the cache is genuinely large.
+_LIVENESS_CACHE_MAX = 512
+
 
 def pid_alive(pid: int) -> bool:
     """Is ``pid`` a live process? One signal-free ``kill``, no subprocess.
@@ -669,11 +679,17 @@ class ProcessLiveness:
             answer = bool(self.alive_probe(pid))
         except Exception:  # noqa: BLE001 - a probe must never break a render
             answer = False
-        self._alive[pid] = (now, answer)
         if not answer:
             # A pid that has gone away invalidates anything we knew about it;
-            # whoever holds that number next is a different process.
+            # whoever holds that number next is a different process. Drop both
+            # entries rather than leave a tombstone - one dead pid per dead
+            # session would otherwise accumulate for the life of a daemon.
+            self._alive.pop(pid, None)
             self._started.pop(pid, None)
+            return False
+        if len(self._alive) >= _LIVENESS_CACHE_MAX:
+            self._prune(now)
+        self._alive[pid] = (now, answer)
         return answer
 
     def started(self, pid: int) -> "Optional[float]":
@@ -689,8 +705,29 @@ class ProcessLiveness:
             answer = self.started_probe(pid)
         except Exception:  # noqa: BLE001 - a probe must never break a render
             answer = None
+        if len(self._started) >= _LIVENESS_CACHE_MAX:
+            self._prune(now)
         self._started[pid] = (now, answer)
         return answer
+
+    def _prune(self, now: float) -> None:
+        """Sweep entries from both caches once past their reuse window.
+
+        A backstop for a long-running daemon: an entry normally leaves on the
+        next question (a live pid is refreshed, a dead one evicted), but a pid
+        that dies unwatched lingers. Gated on :data:`_LIVENESS_CACHE_MAX`, so it
+        runs only when a cache is genuinely large - never on a normal machine.
+        """
+        for pid in [
+            p for p, (at, _) in self._alive.items()
+            if (now - at) >= self.cache_seconds
+        ]:
+            del self._alive[pid]
+        for pid in [
+            p for p, (at, _) in self._started.items()
+            if (now - at) >= self.identity_cache_seconds
+        ]:
+            del self._started[pid]
 
     def verdict(self, session: "SessionState", *, verify: bool) -> "Optional[bool]":
         """Is ``session``'s process still running? Tri-state, never raises.
@@ -1271,6 +1308,24 @@ class StateStore:
         """Convenience: the resolved state value, defaulting to ``IDLE``."""
         winner = self.resolve()
         return winner.state if winner else AgentState.IDLE
+
+    def resolved_and_sessions(self) -> "Tuple[AgentState, list[SessionState]]":
+        """The resolved state **and** the session list, from a single scan.
+
+        ``resolved_state()`` and ``sessions()`` each walk the state directory
+        and read every file. A caller that needs both - the menu bar does, on
+        every poll - would otherwise pay for that twice per tick. This reads
+        once and derives the state from the very list it returns, by the same
+        rule :meth:`resolve` uses, so the two can never disagree.
+
+        ``resolved_state()``'s own behaviour is left untouched: other callers
+        depend on it, and this is an addition beside it, not a change to it.
+        """
+        sessions = self.sessions()
+        if not sessions:
+            return AgentState.IDLE, sessions
+        winner = max(sessions, key=lambda s: (s.state.priority, s.updated_at))
+        return winner.state, sessions
 
 
 def default_store(config: object = None) -> StateStore:
