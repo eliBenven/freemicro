@@ -65,9 +65,9 @@ def test_key_down_fires_the_bound_action():
     results = bridge.handle(key_event("AG00"))
     assert [r.input_id for r in results] == ["AG00"]
     assert results[0].ok and results[0].bound
-    assert backend.calls == [
-        ("type_text", ("/resume",)), ("press_key", ("return",)),
-    ]
+    assert [c[0] for c in backend.calls] == ["type_text", "settle", "press_key"]
+    assert backend.calls[0] == ("type_text", ("/resume",))
+    assert backend.calls[-1] == ("press_key", ("return",))
 
 
 def test_key_up_does_nothing():
@@ -478,9 +478,9 @@ def test_suppression_lifts_the_moment_the_hold_is_released():
     bridge.handle(key_event("ACT09"))
     bridge.handle(key_event("ACT10", act=0))
     assert not bridge.handle(key_event("ACT09"))[0].suppressed
-    assert backend.calls[-2:] == [
-        ("type_text", ("continue",)), ("press_key", ("return",)),
-    ]
+    assert [c[0] for c in backend.calls[-3:]] == ["type_text", "settle", "press_key"]
+    assert backend.calls[-3] == ("type_text", ("continue",))
+    assert backend.calls[-1] == ("press_key", ("return",))
 
 
 def test_a_suppressed_hold_does_not_send_a_stray_release():

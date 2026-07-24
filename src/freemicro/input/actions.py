@@ -144,6 +144,16 @@ class Backend:
         """
         return 0
 
+    def settle(self, seconds: float) -> None:
+        """Pause between two deliveries so the target can catch up.
+
+        A real backend sleeps; a recording one just notes it, so the test
+        suite never actually waits. See :func:`_run_text` for why a submit
+        needs this.
+        """
+        if seconds > 0:
+            time.sleep(seconds)
+
 
 class RecordingBackend(Backend):
     """Records calls instead of performing them.
@@ -164,6 +174,10 @@ class RecordingBackend(Backend):
 
     def press_key(self, combo: str) -> None:
         self.calls.append(("press_key", (combo,)))
+
+    def settle(self, seconds: float) -> None:
+        # Recorded, never slept: the suite must not wait real time.
+        self.calls.append(("settle", (round(seconds, 3),)))
 
     def hold_key(self, combo: str, down: bool) -> None:
         self.calls.append(("hold_key", (combo, down)))
@@ -500,16 +514,41 @@ def _describe_text(act: Action) -> str:
     return f"type {text!r}" + (" + Return" if act.params.get("submit") else "")
 
 
+#: Pause between typing text and the submit Return.
+#:
+#: ``type_text`` injects the whole string as a fast Unicode burst
+#: (``CGEventKeyboardSetUnicodeString``). To a terminal TUI like Claude Code a
+#: burst that big reads as a *paste*, and a Return that arrives while the paste
+#: is still being ingested is taken as a literal newline, not a submit - so a
+#: long ``submit`` prompt drops into a new line instead of sending, while a
+#: short one ("continue") stays under the threshold and works. Waiting first
+#: makes the Return a distinct, deliberate keystroke. Scaled by length because
+#: a longer burst takes longer to deliver and settle; a per-binding
+#: ``submit_delay`` overrides it for anyone who needs to tune it.
+SUBMIT_SETTLE_BASE = 0.12
+SUBMIT_SETTLE_PER_CHAR = 0.003
+SUBMIT_SETTLE_MAX = 0.6
+
+
+def _submit_settle_seconds(text: str, override: Any) -> float:
+    if override is not None:
+        return max(0.0, float(override))
+    return min(SUBMIT_SETTLE_BASE + len(text) * SUBMIT_SETTLE_PER_CHAR,
+               SUBMIT_SETTLE_MAX)
+
+
 @action(
     "text",
     summary="Type literal text; set submit=true to press Return afterwards.",
     required=("text",),
-    optional=("submit",),
+    optional=("submit", "submit_delay"),
     describe=_describe_text,
 )
 def _run_text(act: Action, backend: Backend) -> None:
-    backend.type_text(str(act.params["text"]))
+    text = str(act.params["text"])
+    backend.type_text(text)
     if act.params.get("submit"):
+        backend.settle(_submit_settle_seconds(text, act.params.get("submit_delay")))
         backend.press_key("return")
 
 

@@ -160,13 +160,38 @@ def test_optional_fields_are_allowed():
 def test_text_action_types_and_submits():
     backend = RecordingBackend()
     perform(Action("text", {"text": "/resume", "submit": True}), backend)
-    assert backend.calls == [
-        ("type_text", ("/resume",)),
-        ("press_key", ("return",)),
-    ]
+    kinds = [c[0] for c in backend.calls]
+    assert kinds == ["type_text", "settle", "press_key"]
+    assert backend.calls[0] == ("type_text", ("/resume",))
+    assert backend.calls[-1] == ("press_key", ("return",))
 
 
-def test_text_action_without_submit_does_not_press_return():
+def test_submit_settles_before_return_so_the_burst_is_not_a_newline():
+    """A long submit text must pause before Return, or the Return lands inside
+    the typing burst as a newline instead of sending (the review/PR bug).
+
+    Longer text waits longer, and the wait is bounded; a per-binding
+    ``submit_delay`` overrides it.
+    """
+    long_text = "Open a pull request for this branch and review the diff first."
+
+    b = RecordingBackend()
+    perform(Action("text", {"text": long_text, "submit": True}), b)
+    settle = next(c for c in b.calls if c[0] == "settle")[1][0]
+    assert settle > 0, "no settle before the submit Return"
+
+    short = RecordingBackend()
+    perform(Action("text", {"text": "hi", "submit": True}), short)
+    short_settle = next(c for c in short.calls if c[0] == "settle")[1][0]
+    assert settle > short_settle, "a longer burst should settle longer"
+
+    fixed = RecordingBackend()
+    perform(Action("text", {"text": long_text, "submit": True,
+                            "submit_delay": 0.05}), fixed)
+    assert next(c for c in fixed.calls if c[0] == "settle")[1][0] == 0.05
+
+
+def test_text_action_without_submit_neither_settles_nor_returns():
     backend = RecordingBackend()
     perform(Action("text", {"text": "@"}), backend)
     assert backend.calls == [("type_text", ("@",))]
