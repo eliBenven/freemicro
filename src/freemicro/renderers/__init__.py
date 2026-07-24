@@ -24,9 +24,8 @@ from freemicro.renderers.base import (
     select,
 )
 
-# Importing the modules registers their renderers as a side effect.
+# Importing the module registers its renderer as a side effect.
 from freemicro.renderers import micro_leds as micro_leds  # noqa: E402,F401
-from freemicro.renderers import micro_sniffed as micro_sniffed  # noqa: E402,F401
 
 __all__ = [
     "REGISTRY",

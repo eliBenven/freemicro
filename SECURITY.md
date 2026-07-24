@@ -15,7 +15,7 @@ before anything else:
   sandboxed today. If you run a config you did not write, you are running their
   code.
 
-None of that is a vulnerability — it is the documented design, written up in
+None of that is a vulnerability - it is the documented design, written up in
 full in [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md), including the
 [preset-trust design](docs/SECURITY-MODEL.md#4-design-preset-trust) that must
 ship alongside shareable presets.
@@ -52,7 +52,7 @@ The more of this you have, the faster it gets fixed:
 - Affected version or commit, macOS version, and whether a pad was attached.
 - Reproduction steps, or a proof of concept.
 - The output of `freemicro doctor --report`, which is redacted for exactly this
-  purpose — it strips the contents of `shell` and `applescript` bindings and any
+  purpose - it strips the contents of `shell` and `applescript` bindings and any
   path outside the config directory. **Read it before you send it anyway.**
 
 ### What to expect
@@ -74,12 +74,11 @@ rather not be.
 ### In scope
 
 - Anything that lets a **config execute code without the user's knowledge**
-  beyond what [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md) §1 documents —
-  for example an action kind that runs code without being classified as such.
+  beyond what [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md) §1 documents - for example an action kind that runs code without being classified as such.
 - Web UI weaknesses: a bypass of the loopback bind check, the bearer token, or
   the `Host` header check; a path traversal in static-file serving; anything
   that lets a web page or another local process write a config.
-- **Leaks in the diagnostic report** — anything that gets a shell command, an
+- **Leaks in the diagnostic report** - anything that gets a shell command, an
   AppleScript, a credential or a personal path into `freemicro doctor --report`
   output. This is meant to be safe to paste in public; if it is not, that is a
   bug worth reporting.
@@ -99,15 +98,13 @@ closed with a link to the security model:
 - A config you installed running its own `shell` or `applescript` bindings.
 - A `text` binding typing a command into a focused terminal. That is what typing
   is; see the security model, §1.
-- Anything requiring an attacker who already has code execution as your user —
-  they can rewrite the config directly. Noted in the threat model, §3.4.
+- Anything requiring an attacker who already has code execution as your user - they can rewrite the config directly. Noted in the threat model, §3.4.
 - The permissions being broad. That is macOS's model for Input Monitoring and
   Accessibility, not a FreeMicro choice.
 - The device firmware, the ChatGPT desktop app, or the pad hardware. Report
   those to their vendors.
 - Physical access to your keyboard.
-- Missing hardening that has no exploit path (please still open a normal issue —
-  those are welcome, just not as advisories).
+- Missing hardening that has no exploit path (please still open a normal issue - those are welcome, just not as advisories).
 
 ## Safe harbour
 

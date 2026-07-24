@@ -1,4 +1,4 @@
-# Path B — USB capture playbook (RETIRED, 2026-07-23)
+# Path B - USB capture playbook (RETIRED, 2026-07-23)
 
 > **This plan was never executed, and it is no longer needed.** The Codex Micro's
 > LED channel turned out to speak **JSON-RPC**, not an opaque binary RGB format,
@@ -27,7 +27,7 @@ It assumed:
 
 **1. The payload was text.** Each 63-byte report is framed `[0x02][len][UTF-8
 JSON…]`, CRLF-terminated, carrying JSON-RPC. An earlier write test concluded the
-firmware "accepts writes but ignores every payload" — accurate, and badly
+firmware "accepts writes but ignores every payload" - accurate, and badly
 misleading. The writes were accepted because the *framing* was right; nothing
 happened because the *payload* was not JSON the firmware recognised. Brute
 forcing 63 opaque bytes was never going to work, because the bytes were never
@@ -37,7 +37,7 @@ opaque.
 each HID top-level collection as its own openable path, while macOS vends a
 single `IOHIDDevice` whose primary usage is the keyboard collection. Going
 straight to IOKit works from plain userland with only the user's **Input
-Monitoring** grant — no entitlement, no kext, no second machine.
+Monitoring** grant - no entitlement, no kext, no second machine.
 
 **3. The device documents itself.** Unknown methods return
 `{"error":{"code":404,"message":"Method not found"}}`, and the firmware exposes a
@@ -49,8 +49,8 @@ someone else ask it.
 
 Before reverse-engineering a vendor HID protocol by packet capture, spend ten
 minutes checking whether the payload is **text**, and whether the device answers
-**introspection**. A surprising number of modern USB peripherals — especially
-ESP32-class ones with a companion app — carry JSON-RPC over a vendor collection.
+**introspection**. A surprising number of modern USB peripherals - especially
+ESP32-class ones with a companion app - carry JSON-RPC over a vendor collection.
 If it does, you skip the capture rig entirely and you never touch anyone else's
 traffic.
 

@@ -7,7 +7,7 @@
 >
 > **These are interface facts and default values recorded for interoperability.**
 > No vendor source code, comments, or files are reproduced or vendored here. Where
-> a literal constant is quoted it is the minimum needed to interoperate — a colour
+> a literal constant is quoted it is the minimum needed to interoperate - a colour
 > integer, a timeout, an enum value. The vendor implementation is marked
 > proprietary Work Louder material; treat it as read-only reference, never as a
 > source to copy from.
@@ -37,22 +37,22 @@ anchor strings are the durable part.
 
 ---
 
-## 1. Summary table — semantic state to lighting
+## 1. Summary table - semantic state to lighting
 
 The device has three independent lighting surfaces. The vendor app drives all
 three from one derived model, and *most of the pad is dark most of the time*.
 
-### 1a. Agent Keys (`v.oai.thstatus`, one entry per key, ids 0–5)
+### 1a. Agent Keys (`v.oai.thstatus`, one entry per key, ids 0 - 5)
 
 | Thread status | Onboarding label | Colour (hex) | Colour (int) | Effect | Speed | Brightness |
 |---|---|---|---|---|---|---|
-| `idle` | White – Idle | `#FFFFFF` | `16777215` | solid (1) | 0 | user brightness |
-| `working` | Blue – Thinking | `#304FFE` | `3166206` | solid (1) | 0 | user brightness |
-| `unread` | Green – Complete | `#00FF4C` | `65356` | solid (1) | 0 | user brightness |
-| `awaiting-approval` | Amber – Requires input | `#FF6D00` | `16739584` | solid (1) | 0 | user brightness |
-| `awaiting-response` | Amber – Requires input | `#FF6D00` | `16739584` | solid (1) | 0 | user brightness |
-| `error` | Red – Error | `#FF0033` | `16711731` | solid (1) | 0 | user brightness |
-| `off` (no thread assigned) | Off – No Assigned Agent | `#000000` | `0` | off (0) | 0 | **0** |
+| `idle` | White - Idle | `#FFFFFF` | `16777215` | solid (1) | 0 | user brightness |
+| `working` | Blue - Thinking | `#304FFE` | `3166206` | solid (1) | 0 | user brightness |
+| `unread` | Green - Complete | `#00FF4C` | `65356` | solid (1) | 0 | user brightness |
+| `awaiting-approval` | Amber - Requires input | `#FF6D00` | `16739584` | solid (1) | 0 | user brightness |
+| `awaiting-response` | Amber - Requires input | `#FF6D00` | `16739584` | solid (1) | 0 | user brightness |
+| `error` | Red - Error | `#FF0033` | `16711731` | solid (1) | 0 | user brightness |
+| `off` (no thread assigned) | Off - No Assigned Agent | `#000000` | `0` | off (0) | 0 | **0** |
 
 **The selected key is the exception:** whichever Agent Key corresponds to the
 currently-selected thread is sent `effect: breath (4)` at `speed: 0.4` instead of
@@ -61,9 +61,9 @@ solid/0. Same colour. `syncKeysLighting` and `syncAmbientLighting` are sent as
 
 **Confidence: Confirmed.** Colour map at byte `4795660` (main process,
 `/.vite/build/src-DVXSULz2.js`) and a byte-identical duplicate at `36559265`
-(webview bundle). Thread-lighting builder at byte `2326803`–`2327100` region and
+(webview bundle). Thread-lighting builder at byte `2326803` - `2327100` region and
 `2342600`+ (`/.vite/build/codex-micro-service-*.js`). Legend strings at
-`61787836` (`White – Idle`) and `61788195` (`Green – Complete`).
+`61787836` (`White - Idle`) and `61788195` (`Green - Complete`).
 
 ### 1b. Ambient / underglow (`v.oai.rgbcfg` → `ambient`)
 
@@ -76,8 +76,7 @@ solid/0. Same colour. `syncKeysLighting` and `syncAmbientLighting` are sent as
 | Within 4 s of the selection changing | selected status' colour | solid (1) | 0 |
 | Otherwise | `#000000` | off (0) | 0 |
 
-Voice states take precedence over thread state. **Confidence: Confirmed** —
-ambient builder at byte `2342600`+; voice colours literal at byte `2342833`.
+Voice states take precedence over thread state. **Confidence: Confirmed** - ambient builder at byte `2342600`+; voice colours literal at byte `2342833`.
 
 ### 1c. Key backlight (`v.oai.rgbcfg` → `keys`)
 
@@ -102,7 +101,7 @@ on app quit:
 {"e": 0, "b": 0, "s": 0, "m": 0, "c": 0}
 ```
 
-**Confidence: Confirmed** — object literal at byte `2326882`.
+**Confidence: Confirmed** - object literal at byte `2326882`.
 
 ---
 
@@ -132,12 +131,12 @@ No thread assigned to the slot → `off`.
 
 **One override:** if a slot is the selected thread **and** the app window is
 focused **and** the derived status would be `unread`, it is downgraded to `idle`.
-Rationale is obvious — you're looking at it, so it isn't unread.
+Rationale is obvious - you're looking at it, so it isn't unread.
 
-**Confidence: Confirmed** — `/webview/assets/codex-micro-slot-signals-*.js`,
+**Confidence: Confirmed** - `/webview/assets/codex-micro-slot-signals-*.js`,
 status resolver and slot builder.
 
-Note that "Green – Complete" in the onboarding legend is the `unread` status, not
+Note that "Green - Complete" in the onboarding legend is the `unread` status, not
 a distinct "done" state. Green means *finished and you haven't looked at it yet*.
 It disappears the moment you look. FreeMicro's `done` state should map to
 `unread` (green) and should clear the same way, or the pad will sit green forever.
@@ -145,7 +144,7 @@ It disappears the moment you look. FreeMicro's `done` state should map to
 **Also note:** `pulsing` is a field on the slot model that the thread-lighting
 builder honours (it forces breath, same as `selected`), but **nothing in this
 build ever sets it to true**. It is dead in the shipping app. Confidence:
-Confirmed by exhaustive search — 13 occurrences of `pulsing` in the archive, all
+Confirmed by exhaustive search - 13 occurrences of `pulsing` in the archive, all
 either this consumer, the model serializer, or unrelated CSS class names.
 
 ---
@@ -160,11 +159,11 @@ either this consumer, the model serializer, or unrelated CSS class names.
 | Sent to device as | `brightness / 100` → float **1.0** | Confirmed (slot-signals lighting model) |
 | UI label | "Brightness" / "Adjusts the brightness of all Codex Micro lighting" | Confirmed |
 
-So the slider is 0–100 in the UI and a 0–1 float on the wire, exactly as the
+So the slider is 0 - 100 in the UI and a 0 - 1 float on the wire, exactly as the
 protocol's `b` field expects. Factory default is full brightness.
 
 The same brightness value is applied to the Agent Keys, the ambient ring and the
-key backlight — there is no per-zone brightness. Slots with status `off` are sent
+key backlight - there is no per-zone brightness. Slots with status `off` are sent
 `brightness: 0` regardless of the setting.
 
 `L = 100` in the service is **not** brightness. It is a 100 ms input-quiet
@@ -202,7 +201,7 @@ Not a brightness reduction. **Two full-off writes:**
 1. `v.oai.rgbcfg` with both `keys` and `ambient` set to the all-off payload from §1d.
 2. `v.oai.thstatus` with all six slots at `{c:0, b:0, e:0, s:0, sk:0, sa:0}`.
 
-The device goes completely dark. **Confidence: Confirmed** — the dim path calls
+The device goes completely dark. **Confidence: Confirmed** - the dim path calls
 the same two builders used on shutdown, with the slot list forced to the initial
 all-`off` state and brightness `0`.
 
@@ -216,7 +215,7 @@ Three things, all of which reset the inactivity timer:
 1. **Any HID key event** from the pad (any key, any Agent Key, the encoder).
 2. **Joystick movement with `distance > 0.1`.** Below that it does not count as
    activity.
-3. **Any change to the lighting model itself** — i.e. a thread changing status,
+3. **Any change to the lighting model itself** - i.e. a thread changing status,
    the selection moving, voice state changing, a brightness/auto-dim setting
    change. This matches the UI copy: "Turns lighting off after inactivity and back
    on when you use Codex Micro or an agent key changes color or state."
@@ -225,7 +224,7 @@ On wake the app re-applies the last lighting model in full and restarts the time
 If a wake write fails, the dim timer is rescheduled rather than the state being
 left inconsistent.
 
-**Confidence: Confirmed** — activity threshold literal `R=.1` at byte `2326867`;
+**Confidence: Confirmed** - activity threshold literal `R=.1` at byte `2326867`;
 wake/dim state machine in the same file; UI copy at byte `16474138`.
 
 ---
@@ -234,15 +233,15 @@ wake/dim state machine in the same file; UI copy at byte `16474138`.
 
 The encoder is a **separate input surface from the thumbstick**. It reports as
 three key ids on `v.oai.hid`, exactly like the keys. `v.oai.rad` is the analogue
-thumbstick and never carries encoder data — see §6.
+thumbstick and never carries encoder data - see §6.
 
 | Key id | Event | Meaning | Default binding (`composer-navigation`) |
 |---|---|---|---|
-| `ENC_CW` | `act: 2` | one detent clockwise | synthesise `ArrowUp` — "previous control or option" |
-| `ENC_CC` | `act: 2` | one detent counter-clockwise | synthesise `ArrowDown` — "next control or option" |
+| `ENC_CW` | `act: 2` | one detent clockwise | synthesise `ArrowUp` - "previous control or option" |
+| `ENC_CC` | `act: 2` | one detent counter-clockwise | synthesise `ArrowDown` - "next control or option" |
 | `ENC_CLK` | `act: 1` then `act: 0` | press / release | `Enter` on release; hold 500 ms → open Codex Micro settings |
 
-Rotation is a discrete `act: 2` pulse — there is no press/release pair for turns,
+Rotation is a discrete `act: 2` pulse - there is no press/release pair for turns,
 and `ENC_CW`/`ENC_CC` are explicitly excluded from the press/release decoder.
 **Confidence: Confirmed** (bridge event decoder,
 `/webview/assets/codex-micro-bridge-*.js`).
@@ -251,7 +250,7 @@ and `ENC_CW`/`ENC_CC` are explicitly excluded from the press/release decoder.
 
 This was checked specifically. **Confidence: Confirmed** by exhaustive search of
 every Codex Micro bundle for acceleration, velocity, detent-accumulation or
-rate-limiting logic on the encoder path — there is none.
+rate-limiting logic on the encoder path - there is none.
 
 - **One detent → exactly one synthetic keystroke.** No 1:N multiplication, no
   scaling by turn rate, no accumulator that fires on threshold.
@@ -276,7 +275,7 @@ feel, and the pad's own detents already provide the tactile rate limit.
 | **Default** | **`composer-navigation`** | Confirmed |
 | Stored in | `codex-micro-layout` → `encoderMode` | Confirmed |
 
-> The brief named "Reasoning only" as the default. It is **not** — it is the
+> The brief named "Reasoning only" as the default. It is **not** - it is the
 > second option. The factory default is `composer-navigation`. "Reasoning only"
 > is the `reasoning` mode, UI-labelled *"Reasoning only" / "Open and adjust
 > reasoning effort"* (string ids `settings.codexMicro.knob.reasoning*`, byte
@@ -287,9 +286,9 @@ feel, and the pad's own detents already provide the tactile rate limit.
 
 | Gesture | Behaviour |
 |---|---|
-| Turn clockwise (`ENC_CW`) | "Move to the previous control or option" — synthesises `ArrowUp` |
-| Turn counter-clockwise (`ENC_CC`) | "Move to the next control or option" — synthesises `ArrowDown` |
-| Click | "Open or select the highlighted control" — synthesises `Enter` |
+| Turn clockwise (`ENC_CW`) | "Move to the previous control or option" - synthesises `ArrowUp` |
+| Turn counter-clockwise (`ENC_CC`) | "Move to the next control or option" - synthesises `ArrowDown` |
+| Click | "Open or select the highlighted control" - synthesises `Enter` |
 | Press and hold | Open Codex Micro settings |
 
 Yes, clockwise maps to `ArrowUp` / *previous*. That is what the code and the UI
@@ -324,7 +323,7 @@ There is **no** encoder tap/double-tap window. Click is a single discrete action
 ## 6. Default analog stick bindings
 
 The analogue thumbstick is a **wholly separate input surface from the encoder**
-(§5). It reports `v.oai.rad` → `{a: angle, d: distance}`, both normalised 0–1.
+(§5). It reports `v.oai.rad` → `{a: angle, d: distance}`, both normalised 0 - 1.
 Angle is in turns, not degrees. Hardware testing confirms it returns to exactly
 `{"a": 0, "d": 0}` on release, which means the resting position sits inside every
 deadzone below and no explicit centre-calibration is needed.
@@ -380,7 +379,7 @@ The joystick HUD stays visible for **600 ms** after the last event.
 
 ### Physical key ids
 
-- Agent Keys: `AG00`–`AG05` (six, top row, frosted)
+- Agent Keys: `AG00` - `AG05` (six, top row, frosted)
 - Action keys: `ACT06`, `ACT07`, `ACT08`, `ACT09`, `ACT10`, `ACT11`, `ACT12`
 - Encoder: `ENC_CW`, `ENC_CC`, `ENC_CLK`
 
@@ -405,7 +404,7 @@ discarded. **Confidence: Confirmed** (bridge decoder + layout slot resolver).
 ### Full glyph catalogue
 
 All 37 keycap ids with their icon and default action (byte `61743514`,
-**Confirmed**). `custom-shortcut` means the glyph has no built-in action — it is
+**Confirmed**). `custom-shortcut` means the glyph has no built-in action - it is
 a blank the user binds a command to.
 
 | Keycap | Icon | Size | Default action |
@@ -448,7 +447,7 @@ a blank the user binds a command to.
 | `YEET` | empty | single | types `:yeet:` into the composer |
 | `EMPT5` | empty | **double** | none (`custom-shortcut`) |
 
-Note: the task brief guessed `PR` → "Create PR". Confirmed correct — the command
+Note: the task brief guessed `PR` → "Create PR". Confirmed correct - the command
 id is `git.createPullRequest`.
 
 Only `MIC` and `EMPT5` are double-width, so `ACT10_ACT11` can only ever hold one
@@ -460,7 +459,7 @@ of those two.
 2. `MIC` **always** resolves to push-to-talk, ignoring any override.
 3. Assigning a keycap that already occupies another slot **swaps** the two slots.
 4. Action keys fire on key-down (`act: 1`) only. Push-to-talk is the sole
-   exception — it uses both down and up.
+   exception - it uses both down and up.
 
 **Confidence: Confirmed** (layout module action resolver and slot-assignment
 helper).
@@ -475,23 +474,23 @@ helper).
 
 `recent` takes the six most-recently-updated threads (pinned threads and pinned
 project threads are merged in, then the whole set is sorted by update time
-descending, then sliced to 6). Slot index 0–5 maps to `AG00`–`AG05` in order.
+descending, then sliced to 6). Slot index 0 - 5 maps to `AG00` - `AG05` in order.
 
 ---
 
 ## 8. Agent-key and MIC tap semantics
 
-### Agent Keys (`AG00`–`AG05`)
+### Agent Keys (`AG00` - `AG05`)
 
 Fires on key-down only. Behaviour:
 
 | Gesture | Behaviour |
 |---|---|
-| **Single tap** | Select that slot's thread and open it *in the background* — the ChatGPT window is not raised. |
+| **Single tap** | Select that slot's thread and open it *in the background* - the ChatGPT window is not raised. |
 | **Double tap** | Same, plus raise/focus the ChatGPT window. |
 
 Double-tap window: **350 ms**, and it must be the *same slot* **and** the *same
-thread key*. Both conditions are required — tapping two different keys quickly is
+thread key*. Both conditions are required - tapping two different keys quickly is
 never a double tap. **Confidence: Confirmed** (constant at byte `61677742`;
 comparison in the bridge's tap resolver).
 
@@ -500,7 +499,7 @@ double tap to bring Codex window to the front and center." (byte `61784803`).
 
 **Context override:** while a menu, listbox or the add-context popover is open,
 all Agent Key presses are swallowed *except* `AG00`, which sends `Escape`. During
-that state the app also repaints the pad — see §9d. **Confidence: Confirmed.**
+that state the app also repaints the pad - see §9d. **Confidence: Confirmed.**
 
 **Unassigned slot, `custom` source:** pressing an empty Agent Key while agent
 source is `custom` creates and assigns a new thread to that key. Under the
@@ -516,11 +515,11 @@ again to stop" (byte `16471763`).
 |---|---|---|---|
 | idle | press | pressed | **start** |
 | pressed | release after **>= 350 ms** | idle | **stop** (classic hold-to-talk) |
-| pressed | release before 350 ms | waiting-for-second-press (deadline = press + 350 ms) | — |
+| pressed | release before 350 ms | waiting-for-second-press (deadline = press + 350 ms) | - |
 | waiting | 350 ms elapses | idle | **stop** |
-| waiting | press | latched (keeps recording indefinitely) | — |
+| waiting | press | latched (keeps recording indefinitely) | - |
 | latched | press | suppressing (350 ms) | **stop** |
-| suppressing | press before deadline elapses | suppressing | — |
+| suppressing | press before deadline elapses | suppressing | - |
 | suppressing | press after deadline | pressed | **start** |
 
 **Confidence: Confirmed** (bridge state machine; constant at byte `61677742`).
@@ -533,7 +532,7 @@ The voice state that drives ambient lighting (§1b) is a separate small machine:
 |---|---|
 | `recording` | dictation active |
 | `processing` | transcription active |
-| `completed` | dictation finished — held for **1000 ms** |
+| `completed` | dictation finished - held for **1000 ms** |
 | `idle` | otherwise; `completed` decays to this after 1000 ms |
 
 **Confidence: Confirmed** (byte `21259070`).
@@ -557,12 +556,12 @@ This independently corroborates the VID/PID/usage-page in
 
 On macOS the app does **not** use `node-hid`'s enumerator. It ships a native
 addon (`hid-topology-watcher.node`) exposing `findCodexMicroInterfaces()` and a
-topology-change watcher — the same macOS HID-collection problem `PROTOCOL.md`
+topology-change watcher - the same macOS HID-collection problem `PROTOCOL.md`
 documents, solved the same way (go under hidapi). On Linux it falls back to
 `node-hid`'s `devicesAsync(VID, PID)` filtered on usage page `0xFF00`.
 
 The HID handle is opened **non-exclusively on macOS**. That means FreeMicro and
-the ChatGPT app *can* both hold the device open — and will then fight over the
+the ChatGPT app *can* both hold the device open - and will then fight over the
 LEDs, each overwriting the other. Quitting the ChatGPT app remains mandatory.
 **Confidence: Confirmed** (device-kit transport open path).
 
@@ -574,7 +573,7 @@ sequence is:
 1. Open the HID handle.
 2. Subscribe to `v.oai.hid` and `v.oai.rad` notifications.
 3. Mark the pad as "currently dark" internally, then **immediately push the
-   current lighting model** — one `v.oai.rgbcfg` and one `v.oai.thstatus`.
+   current lighting model** - one `v.oai.rgbcfg` and one `v.oai.thstatus`.
 4. Poll `device.status` for battery, then every **60000 ms** thereafter.
 
 So the app *does* claim the lighting on connect, unconditionally, with whatever
@@ -592,7 +591,7 @@ Explicitly blanks the pad before disconnecting:
 
 ### On unexpected disconnect (cable pulled)
 
-Nothing is sent — it can't be. Internal state is reset and reconnect is scheduled.
+Nothing is sent - it can't be. Internal state is reset and reconnect is scheduled.
 Whatever was last written stays on the LEDs until the firmware decides otherwise.
 
 ### Reconnect / rescan timing
@@ -608,7 +607,7 @@ Whatever was last written stays on the LEDs until the firmware decides otherwise
 
 ### Write discipline
 
-Every lighting write goes through a serialised promise queue — never two in
+Every lighting write goes through a serialised promise queue - never two in
 flight. The app also caches the JSON of the last successfully-applied `rgbcfg`
 and `thstatus` payloads and **skips the write entirely if nothing changed**. This
 is worth copying: it is why the pad doesn't flicker under rapid state churn.
@@ -631,7 +630,7 @@ is open, `AG00` turns red to advertise itself as the back-out key.
 
 ---
 
-## 10. Battery, charging, and transport — do they change the lighting?
+## 10. Battery, charging, and transport - do they change the lighting?
 
 Asked explicitly because the pad is battery-powered and untethered, and auto-dim
 looks power-motivated. Both answers are clean negatives, and both are worth
@@ -639,7 +638,7 @@ stating plainly so nobody re-investigates.
 
 ### 10a. Battery and charging state: **no effect on lighting whatsoever**
 
-**Confidence: Confirmed** — by exhaustive search of every Codex Micro bundle for
+**Confidence: Confirmed** - by exhaustive search of every Codex Micro bundle for
 `battery`, `batteryPercentage` and `isCharging`. Every single occurrence is one
 of: the `device.status` poll, the internal device-state object, the settings-page
 readout, or a React memo key. **None of them is ever read by any lighting code.**
@@ -656,7 +655,7 @@ the pad: the settings page renders the battery percentage in the error/red text
 token when it is `<= 20%` **and** not charging. That is a CSS class on a `<span>`
 in the app window. It never reaches the device.
 
-So the answer to "is auto-dim power-motivated?" is: probably, in intent — but it
+So the answer to "is auto-dim power-motivated?" is: probably, in intent - but it
 is implemented as a flat inactivity timeout with no power awareness at all.
 FreeMicro can implement auto-dim exactly as §4 describes and be factory-correct
 on battery and on USB alike.
@@ -669,7 +668,7 @@ should be off by default.
 ### 10b. Transport: lighting is **not** USB-conditioned
 
 **Confidence: Confirmed.** The device kit computes an `isUsbConnection` flag
-(from the HID release field — `(release & 3) === 0`) and stores it on every
+(from the HID release field - `(release & 3) === 0`) and stores it on every
 discovered device record. It is **never read** by the Codex Micro service, the
 lighting builders, the bridge, or anything on the lighting path. Grep the whole
 archive: four occurrences, all either the type declaration or the two places that
@@ -696,23 +695,23 @@ Two practical consequences for FreeMicro:
 
 | Claim | Status |
 |---|---|
-| `lights.preview` is applied immediately and **not** persisted to flash | **Confirmed** — vendor API doc comment at bytes `12388648` and `12714664` |
-| The app never uses `lights.preview` for Codex Micro at all | **Confirmed** — the entire Codex Micro lighting path is `v.oai.rgbcfg` + `v.oai.thstatus`; no call to `sendLightingPreview` exists in the Codex Micro service |
-| Whether `v.oai.rgbcfg` persists to flash | **Unknown** — the vendor docs are silent. The method is named "config" and is the counterpart to a "preview", which *suggests* persistence, but that is inference, not evidence |
+| `lights.preview` is applied immediately and **not** persisted to flash | **Confirmed** - vendor API doc comment at bytes `12388648` and `12714664` |
+| The app never uses `lights.preview` for Codex Micro at all | **Confirmed** - the entire Codex Micro lighting path is `v.oai.rgbcfg` + `v.oai.thstatus`; no call to `sendLightingPreview` exists in the Codex Micro service |
+| Whether `v.oai.rgbcfg` persists to flash | **Unknown** - the vendor docs are silent. The method is named "config" and is the counterpart to a "preview", which *suggests* persistence, but that is inference, not evidence |
 | Whether `v.oai.thstatus` persists | **Unknown**, same |
-| What the pad shows with no host software | **Inferred** — `PROTOCOL.md` records breath (effect 4) as the firmware idle default observed on hardware |
+| What the pad shows with no host software | **Inferred** - `PROTOCOL.md` records breath (effect 4) as the firmware idle default observed on hardware |
 
 > ### Correction needed in `PROTOCOL.md`
 >
 > `PROTOCOL.md` currently says `v.oai.rgbcfg` ACKs but produces no visible change,
 > and recommends `lights.preview` as the live path. The vendor app does the exact
-> opposite: it drives **all** live lighting — keys, ambient, and per-key — through
+> opposite: it drives **all** live lighting - keys, ambient, and per-key - through
 > `v.oai.rgbcfg` and `v.oai.thstatus`, and never touches `lights.preview`.
 >
 > Both observations can be true at once. The most likely explanation is that
 > `rgbcfg` only takes visible effect for zones the firmware isn't otherwise
 > driving, or that the earlier hardware test sent a `keys`/`ambient` combination
-> the firmware treats as a no-op. **This needs one more hardware probe** — send
+> the firmware treats as a no-op. **This needs one more hardware probe** - send
 > the exact `rgbcfg` + `thstatus` pair the app sends on connect, in that order,
 > and watch. Until then, treat "rgbcfg does nothing" as unverified.
 >
@@ -730,7 +729,7 @@ Two practical consequences for FreeMicro:
 lighting:
   brightness: 1.0            # vendor default 100/100
   auto_dim: 180              # seconds; vendor default "3-minutes"
-  auto_dim_action: blank     # full off, not reduced brightness — matches vendor
+  auto_dim_action: blank     # full off, not reduced brightness - matches vendor
 
   # Agent Keys (v.oai.thstatus), ids 0-5
   states:
@@ -787,7 +786,7 @@ Three implementation notes that matter more than the colours:
 **Recommendation: no. Leave the pad untouched until the user opts in, once,
 explicitly. Then remember the answer and never ask again.**
 
-The honest case for sending on startup is that it is what the vendor does — the
+The honest case for sending on startup is that it is what the vendor does - the
 ChatGPT app claims the LEDs the instant it connects, without asking. Factory
 parity is the project's stated principle, and this is factory behaviour.
 
@@ -800,8 +799,7 @@ The case against is stronger, for three reasons specific to *us*:
    working setup on first launch is the worst possible first impression, and the
    user has no way to tell which program is at fault.
 2. **A silent LED takeover is not reversible by the user.** If FreeMicro paints
-   the pad at startup and the user doesn't want that, there is no obvious undo —
-   the vendor app's blank-on-quit only runs if *it* was the one that connected.
+   the pad at startup and the user doesn't want that, there is no obvious undo - the vendor app's blank-on-quit only runs if *it* was the one that connected.
    The user is left with a pad stuck in our colours and no clue why.
 3. **The failure modes are asymmetric.** Not lighting the pad costs one command
    (`freemicro render idle`) and a line in the README. Lighting it uninvited costs
@@ -810,7 +808,7 @@ The case against is stronger, for three reasons specific to *us*:
 
 The parity principle is about *what colours mean*, not about seizing hardware on
 launch. We honour it by making the opt-in produce output indistinguishable from
-factory — same colours, same effects, same speeds, same dim timing, same
+factory - same colours, same effects, same speeds, same dim timing, same
 blank-on-exit. That is the promise worth keeping.
 
 Concretely:
@@ -832,21 +830,21 @@ Concretely:
 |---|---|---|
 | 1 | Does `v.oai.rgbcfg` visibly drive the base, contradicting `PROTOCOL.md`? | Send the app's exact connect-time pair (`rgbcfg` then `thstatus`) on hardware and watch |
 | 2 | Does `rgbcfg`/`thstatus` survive a power cycle? | Set a distinctive colour, unplug, replug with no host software |
-| 3 | What is the `m` ("magic") field for? | The app always sends `0`. Sweep 0–1 on hardware |
+| 3 | What is the `m` ("magic") field for? | The app always sends `0`. Sweep 0 - 1 on hardware |
 | 4 | Firmware idle default with no host | `PROTOCOL.md` says breath (4). Confirm the colour and speed |
 | 5 | Does the firmware apply its own fade/ramp on effect changes? | Would explain why 100 ms debouncing is enough for the vendor |
-| 6 | Does the *firmware* dim on battery, independently of the host? | The host does not (§10a). If the pad dims itself on battery, that is firmware behaviour and FreeMicro inherits it for free — leave the pad idle on battery and watch |
+| 6 | Does the *firmware* dim on battery, independently of the host? | The host does not (§10a). If the pad dims itself on battery, that is firmware behaviour and FreeMicro inherits it for free - leave the pad idle on battery and watch |
 
 ### Closed by this research
 
 | Question | Answer |
 |---|---|
-| Exact status → colour integers behind `t.wl(status)` | **Answered.** §1a — all six, integer and hex |
-| Does the app accelerate or debounce encoder rotation? | **No.** §5 — one detent, one action, no acceleration |
-| Does the app condition lighting on battery or charging? | **No.** §10a — battery is display-only |
-| Is any lighting default USB-specific? | **No.** §10b — the transport flag exists but is never read |
-| Is there a low-battery colour on the pad? | **No.** §10a — the only battery colour rule is on screen |
-| Is `pulsing` ever used? | **No.** §2 — dead field in the shipping build |
+| Exact status → colour integers behind `t.wl(status)` | **Answered.** §1a - all six, integer and hex |
+| Does the app accelerate or debounce encoder rotation? | **No.** §5 - one detent, one action, no acceleration |
+| Does the app condition lighting on battery or charging? | **No.** §10a - battery is display-only |
+| Is any lighting default USB-specific? | **No.** §10b - the transport flag exists but is never read |
+| Is there a low-battery colour on the pad? | **No.** §10a - the only battery colour rule is on screen |
+| Is `pulsing` ever used? | **No.** §2 - dead field in the shipping build |
 
 ---
 

@@ -7,7 +7,7 @@
 ## Transport
 
 The pad works over **both USB and Bluetooth LE**, but the two transports do
-**not** frame writes identically — this is the single most expensive gotcha in
+**not** frame writes identically - this is the single most expensive gotcha in
 this document.
 
 | | USB | Bluetooth LE |
@@ -30,14 +30,14 @@ the host→device path is framed correctly; success return codes prove nothing.
 
 > **Verified wireless, 2026-07-23.** With the 64-byte prefixed framing, key,
 > joystick and encoder events stream in over BLE *and* `v.oai.rgbcfg` +
-> `v.oai.thstatus` visibly drive the LEDs — confirmed by eye with the cable
+> `v.oai.thstatus` visibly drive the LEDs - confirmed by eye with the cable
 > unplugged. An earlier conclusion that "LEDs require USB" was **wrong**: the
 > writes were malformed, not the transport incapable.
 
-- USB HID, **VID `0x303A` / PID `0x8360`** (Espressif silicon — *not* RP2040).
+- USB HID, **VID `0x303A` / PID `0x8360`** (Espressif silicon - *not* RP2040).
 - Vendor collection: **usage page `0xFF00`, Report ID 6**, 63-byte Input *and*
   Output reports. There is **no VIA/QMK `0xFF60` channel**.
-- **Write framing differs by transport** — the single nastiest trap here:
+- **Write framing differs by transport** - the single nastiest trap here:
 
   | Transport | Output buffer | Length | `reportID` arg |
   |---|---|---|---|
@@ -52,7 +52,7 @@ the host→device path is framed correctly; success return codes prove nothing.
 > A **wrongly framed write still returns `kIOReturnSuccess`** and is silently
 > discarded by the device. `IOHIDDeviceSetReport` returning 0 tells you the OS
 > accepted the buffer, not that the firmware understood it. The only trustworthy
-> health check is a **`device.status` round trip** — send it and wait for a
+> health check is a **`device.status` round trip** - send it and wait for a
 > reply. `freemicro doctor` does exactly that; do the same in any new code.
 > Trusting the return code cost this project hours.
 - Payload is **JSON-RPC**. Compact form `{"m":…,"p":…,"id":…}` and standard
@@ -74,20 +74,20 @@ Requires **Input Monitoring** permission.
 | Method | Params | Meaning |
 |---|---|---|
 | `v.oai.hid` | `{k, act, ag}` | Key event. `k`=key id, `act` 1=down 0=up, `ag`=agent index |
-| `v.oai.rad` | `{a, d}` | **Joystick** position. `a`=angle, `d`=distance, both normalized 0–1 |
+| `v.oai.rad` | `{a, d}` | **Joystick** position. `a`=angle, `d`=distance, both normalized 0 - 1 |
 
 **Key ids** (all arrive via `v.oai.hid`, with `act` 1=down / 0=up):
 
 | Id | Input |
 |---|---|
-| `AG00`–`AG05` | the six Agent Keys |
-| `ACT06`–`ACT12` | the seven action keys |
+| `AG00` - `AG05` | the six Agent Keys |
+| `ACT06` - `ACT12` | the seven action keys |
 | `ENC_CLK` | encoder (dial) press |
-| **`ENC_CW`** | **encoder rotated clockwise** — one event per detent |
+| **`ENC_CW`** | **encoder rotated clockwise** - one event per detent |
 | **`ENC_CC`** | **encoder rotated counter-clockwise** |
 
 The action keys are **fixed switch positions**. The **keycaps are physically
-swappable** — the pad ships with a tray of ~35 interchangeable caps — so *which
+swappable** - the pad ships with a tray of ~35 interchangeable caps - so *which
 icon sits on which position is the owner's choice, not a property of the
 hardware*. Do not hard-code a cap-to-id mapping.
 
@@ -95,8 +95,8 @@ Two facts about the positions themselves *are* hardware, and do generalise:
 
 | Ids | What is fixed |
 |---|---|
-| `ACT06`–`ACT09` | four single-width switch positions |
-| **`ACT10` + `ACT11`** | a **double-width** slot. One wide keycap spans **both** switches, so **both ids fire on every press** — bind them identically. The factory addresses this slot as `ACT10_ACT11` |
+| `ACT06` - `ACT09` | four single-width switch positions |
+| **`ACT10` + `ACT11`** | a **double-width** slot. One wide keycap spans **both** switches, so **both ids fire on every press** - bind them identically. The factory addresses this slot as `ACT10_ACT11` |
 | `ACT12` | one single-width switch position |
 
 ### Factory keycap arrangement (verified from an unopened unit)
@@ -112,7 +112,7 @@ Two facts about the positions themselves *are* hardware, and do generalise:
 
 Confirmed two ways: the vendor app's shipped layout (`docs/FACTORY-DEFAULTS.md`)
 and a photograph of a boxed unit. **Default to this**, and let the user say
-otherwise — the unit this protocol was otherwise captured on had been
+otherwise - the unit this protocol was otherwise captured on had been
 rearranged by its owner to `LAB / PR / NAV / PLAY / MIC / TERM`, which is why a
 cap-to-id mapping must never be treated as hardware.
 
@@ -130,7 +130,7 @@ The pad also carries a **haptic pad** (tap + circle) beside three small white
 indicator LEDs. It switches the pad's **Bluetooth host profile** (three slots;
 the pad advertises as `Codex Micro #1/#2/#3`, and `device.status.profile_index`
 reports the active one, zero-indexed). It emits **only standard HID** (report
-ids 1/2), never `v.oai.hid`, so **FreeMicro cannot bind it** — it is the one
+ids 1/2), never `v.oai.hid`, so **FreeMicro cannot bind it** - it is the one
 input on the device we do not own.
 
 > **`act` on encoder rotation is not reliably `1`.** Detent events have been
@@ -145,7 +145,7 @@ and returns to exactly `{"a":0,"d":0}` on release, which is how it is
 distinguished from the dial.
 
 > The keys do **not** emit ordinary keyboard scancodes. Nothing happens unless
-> software listens on this channel — which is why the pad appears inert without
+> software listens on this channel - which is why the pad appears inert without
 > the vendor app.
 
 ## Host -> device methods
@@ -155,10 +155,10 @@ distinguished from the dial.
 | Method | Purpose |
 |---|---|
 | `sys.version` | firmware version |
-| `sys.bootloader` | ⚠️ reboots into DFU — **the device disconnects**. Never call during normal operation; gate behind an explicit confirmation if you expose it at all |
+| `sys.bootloader` | ⚠️ reboots into DFU - **the device disconnects**. Never call during normal operation; gate behind an explicit confirmation if you expose it at all |
 | `sys.selftest` | enter self-test / diagnostics |
 | `device.status` | `{version, profile_index, layer_index, battery, is_charging}` (read-only) |
-| `lights.preview` | documented as real-time lighting — but **does nothing on v0.4.1**; use `v.oai.rgbcfg` |
+| `lights.preview` | documented as real-time lighting - but **does nothing on v0.4.1**; use `v.oai.rgbcfg` |
 | `ui.active_screen` | query active screen |
 | `ui.home_accent_color` | home-screen accent colour |
 | `mp.write_info` / `mp.write_artwork` | media metadata / artwork |
@@ -168,23 +168,23 @@ distinguished from the dial.
 
 Legacy text protocol equivalents also exist: `version`, `bootloader`, `selftest`.
 
-### Vendor (OpenAI) methods — ✅ these are the ones that work
+### Vendor (OpenAI) methods - ✅ these are the ones that work
 
 | Method | Params | Effect |
 |---|---|---|
 | **`v.oai.rgbcfg`** | `{ambient:{…}, keys:{…}}` | **The underglow/chassis glow + key backlight.** Verified visually. ACKs `{"ok":1}` |
-| **`v.oai.thstatus`** | `[{id, c, b, e, s, sk, sa}, …]` | **Per-Agent-Key colour** (ids 0–5). Verified visually |
+| **`v.oai.thstatus`** | `[{id, c, b, e, s, sk, sa}, …]` | **Per-Agent-Key colour** (ids 0 - 5). Verified visually |
 
 > ### ⚠️ Use `v.oai.*`, not `lights.preview`
 >
 > `lights.preview` is a real method in the firmware's table and returns
-> `{"result": null}` — but on this device **it produces no visible change**,
+> `{"result": null}` - but on this device **it produces no visible change**,
 > for either zone, over USB or Bluetooth, with the vendor app quit.
 > `v.oai.rgbcfg` drives the glow; `v.oai.thstatus` drives the Agent Keys.
 > This matches the vendor app, which calls the two `v.oai.*` methods and
 > **never** calls `lights.preview`.
 >
-> An earlier revision of this document claimed the opposite — that `rgbcfg`
+> An earlier revision of this document claimed the opposite - that `rgbcfg`
 > acknowledged without doing anything, so `lights.preview` should be used.
 > That was wrong. The original `rgbcfg` test predated the discovery that
 > Bluetooth needs 64-byte report-id-prefixed framing, so those writes were
@@ -192,7 +192,7 @@ Legacy text protocol equivalents also exist: `version`, `bootloader`, `selftest`
 > from them. Verify lighting by **eye**, and only after confirming the framing
 > with a `device.status` round trip.
 
-### `lights.preview` — documented, but inert on this firmware
+### `lights.preview` - documented, but inert on this firmware
 
 ```json
 {"m":"lights.preview","p":{
@@ -202,13 +202,13 @@ Legacy text protocol equivalents also exist: `version`, `bootloader`, `selftest`
 
 `backlight` = under the keycaps, `underglow` = the base/underside strip. Unlike
 the `v.oai.*` calls these use **full field names**: `effect` (required),
-`brightness` 0–1, `speed` 0–1, `magic` 0–1, `color` packed `0xRRGGBB` integer.
+`brightness` 0 - 1, `speed` 0 - 1, `magic` 0 - 1, `color` packed `0xRRGGBB` integer.
 Replies `{"result": null}`.
 
 > **Verified on hardware, over USB *and* Bluetooth:** `lights.preview` drives the
 > base, and `v.oai.thstatus` sets each of the six Agent Keys independently. Both
 > confirmed visually. Note that each call *replaces* the previous state, so a
-> rapid sequence looks like only its final frame — hold a colour for a second
+> rapid sequence looks like only its final frame - hold a colour for a second
 > or two when testing by eye.
 
 > ### 🔶 Open question: `rgbcfg` vs `lights.preview`
@@ -221,7 +221,7 @@ Replies `{"result": null}`.
 >
 > Both cannot be the whole truth. The likeliest explanation is a false negative
 > on our side: each lighting call replaces the last, so a fast test sequence
-> shows only its final frame — a mistake this project made repeatedly.
+> shows only its final frame - a mistake this project made repeatedly.
 >
 > **Unresolved.** FreeMicro defaults to the path it has actually watched work,
 > and switching is one config key (`lighting.method: "rgbcfg"`). Do not treat
@@ -240,7 +240,7 @@ The vendor methods use **minimized** field names, unlike `lights.preview`:
 | `m` | "magic" (purpose not yet characterized) |
 
 In `v.oai.rgbcfg` the two sides are `ambient` (outer/base) and `keys` (under the
-keycaps). A `v.oai.thstatus` entry adds `id` (Agent-Key index 0–5), `sk` (sync
+keycaps). A `v.oai.thstatus` entry adds `id` (Agent-Key index 0 - 5), `sk` (sync
 keys backlight, 0/1) and `sa` (sync ambient, 0/1).
 
 ### Effects
@@ -251,11 +251,11 @@ keys backlight, 0/1) and `sa` (sync ambient, 0/1).
 | 1 | solid |
 | 2 | snake |
 | 3 | rainbow |
-| 4 | breath *(firmware default — the "breathing" seen when idle)* |
+| 4 | breath *(firmware default - the "breathing" seen when idle)* |
 | 5 | gradient |
 | 6 | shallowBreath (0.5 -> 1 brightness) |
 
-### Example — stored config
+### Example - stored config
 
 ```json
 {"m":"v.oai.rgbcfg","p":{
@@ -263,7 +263,7 @@ keys backlight, 0/1) and `sa` (sync ambient, 0/1).
   "keys":   {"e":1,"b":1,"s":0,"c":16711680}}}
 ```
 Device acknowledges with `{"result":{"ok":1},"id":null,"method":"v.oai.rgbcfg"}`
-— but **nothing visibly changes**. Treat `rgbcfg` as stored configuration and
+- but **nothing visibly changes**. Treat `rgbcfg` as stored configuration and
 use `lights.preview` (plus `v.oai.thstatus` for the Agent Keys) for live state.
 
 ## How FreeMicro implements this

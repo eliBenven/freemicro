@@ -1,6 +1,6 @@
 # Customizing FreeMicro
 
-Everything the pad does — every key, the joystick, and every LED colour — lives
+Everything the pad does - every key, the joystick, and every LED colour - lives
 in one file you own. Nothing here requires editing Python.
 
 ```sh
@@ -23,7 +23,7 @@ this order and uses the first file it finds:
 `freemicro keys --list` always prints which one won, so you never have to guess.
 
 > **Why JSON and not TOML?** FreeMicro's core is dependency-free on Python 3.9,
-> and `tomllib` only landed in 3.11 — TOML would force a `tomli` dependency on
+> and `tomllib` only landed in 3.11 - TOML would force a `tomli` dependency on
 > exactly the people least likely to want one. JSON is stdlib everywhere, it is
 > already the format of `config.json` and `capabilities.json`, and it
 > round-trips losslessly for `--init`. To buy back the readability TOML would
@@ -36,14 +36,14 @@ One entry per input id:
 
 | Input ids | What they are |
 |---|---|
-| `AG00`–`AG05` | the six top-row Agent Keys. One project each — see [`AGENT-KEYS.md`](AGENT-KEYS.md) |
-| `ACT06`–`ACT12` | the seven action keys. On the unit we tested: `ACT06` LAB, `ACT07` PR, `ACT08` NAV, `ACT09` PLAY, `ACT10`+`ACT11` MIC (one double-width keycap over two switches), `ACT12` TERM |
+| `AG00` - `AG05` | the six top-row Agent Keys. One project each - see [`AGENT-KEYS.md`](AGENT-KEYS.md) |
+| `ACT06` - `ACT12` | the seven action keys. On the unit we tested: `ACT06` LAB, `ACT07` PR, `ACT08` NAV, `ACT09` PLAY, `ACT10`+`ACT11` MIC (one double-width keycap over two switches), `ACT12` TERM |
 | `ENC_CLK` | dial press |
 | `ENC_CW` / `ENC_CC` | dial rotation, one event per detent |
 | `JOY_UP` `JOY_DOWN` `JOY_LEFT` `JOY_RIGHT` | thumbstick flicks |
 
 Don't know which physical key is which id? Run `freemicro keys --dry-run` and
-press it — the id is printed.
+press it - the id is printed.
 
 ```json
 "bindings": {
@@ -65,14 +65,14 @@ of lines) and is ignored by the loader.
 | `action` | Required | Optional | What it does |
 |---|---|---|---|
 | `text` | `text` | `submit` | Types the text. `submit: true` presses Return after. |
-| `key` | `key` | — | Presses a keystroke. |
-| `hold` | `key` | — | Holds the key down for as long as you hold the pad key. True push-to-talk. |
+| `key` | `key` | - | Presses a keystroke. |
+| `hold` | `key` | - | Holds the key down for as long as you hold the pad key. True push-to-talk. |
 | `shell` | `command` | `cwd`, `wait` | Runs a shell command. Fire-and-forget unless `wait: true`. |
-| `applescript` | `script` | — | Runs arbitrary AppleScript. The escape hatch. |
+| `applescript` | `script` | - | Runs arbitrary AppleScript. The escape hatch. |
 | `app` | `name` | `cycle` | Focuses an app. `cycle: true` cycles its windows if it's already frontmost. |
-| `focus_session` | — | `slot`, `project`, `fallback` | Raises the terminal tab running that Agent Key's project. The default on `AG00`–`AG05`; see [`AGENT-KEYS.md`](AGENT-KEYS.md). |
-| `mouse` | — | `x`, `y`, `absolute`, `click`, `count` | Moves the pointer and/or clicks. |
-| `none` | — | — | Explicitly unbind an input. |
+| `focus_session` | - | `slot`, `project`, `fallback` | Raises the terminal tab running that Agent Key's project. The default on `AG00` - `AG05`; see [`AGENT-KEYS.md`](AGENT-KEYS.md). |
+| `mouse` | - | `x`, `y`, `absolute`, `click`, `count` | Moves the pointer and/or clicks. |
+| `none` | - | - | Explicitly unbind an input. |
 
 `freemicro keys --list` prints this table from the live registry, so it can never
 drift from what your build actually supports.
@@ -86,12 +86,11 @@ Combos are written with `-` or `+`, modifiers first:
   `shift`.
 * **Named keys:** `return`, `enter`, `tab`, `space`, `delete`, `forward-delete`,
   `escape`, `home`, `end`, `page-up`, `page-down`, `up`, `down`, `left`,
-  `right`, `f1`–`f12`, `help`.
+  `right`, `f1` - `f12`, `help`.
 * **Anything printable** works as itself: `a`, `7`, `/`. Because `-` and `+`
   separate a combo, write those keys by name: `minus`, `plus`, `equals`,
   `comma`, `period`, `slash`, `backslash`, `semicolon`, `quote`, `grave`.
-* **`fn`** works too (`fn-space`), but only through the CGEvent backend —
-  AppleScript cannot express it at all, and FreeMicro says so rather than failing
+* **`fn`** works too (`fn-space`), but only through the CGEvent backend - AppleScript cannot express it at all, and FreeMicro says so rather than failing
   silently. Whether a *synthetic* fn triggers third-party dictation apps is
   **unverified**.
 
@@ -176,7 +175,7 @@ def _run_notify(act, backend):
 ```
 
 It is then loadable from config, validated, listed by `--list`, and covered by
-`--dry-run` — no dispatch `if` chain to touch.
+`--dry-run` - no dispatch `if` chain to touch.
 
 ## The mic key / push-to-talk
 
@@ -184,7 +183,7 @@ It is then loadable from config, validated, listed by `--list`, and covered by
 it on yours. The shipped default puts a dictation shortcut there:
 
 ```json
-"ACT11": { "action": "key", "key": "ctrl+option+cmd+d", "label": "mic — dictation" }
+"ACT11": { "action": "key", "key": "ctrl+option+cmd+d", "label": "mic - dictation" }
 ```
 
 Assign that **same** shortcut inside your dictation app and the key toggles it:
@@ -331,7 +330,7 @@ freemicro lights --enable     # and --disable to hand the pad back
 This is deliberate. macOS opens this HID device non-exclusively, so the ChatGPT
 desktop app may also be writing these LEDs. Taking over your hardware should be
 something you decide, not something that happens to you. You do **not** have to
-quit anything to run FreeMicro — see
+quit anything to run FreeMicro - see
 [Running alongside the ChatGPT app](#running-alongside-the-chatgpt-app).
 
 ```json
@@ -352,14 +351,14 @@ quit anything to run FreeMicro — see
 | `zones` | `backlight` (under the keycaps), `underglow` (base strip), `agent_keys` (the six top keys, set individually) |
 | `color` | `"#RRGGBB"`, `"#f0a"`, `"0xRRGGBB"`, `[r, g, b]`, or a packed integer |
 | `effect` | `off`, `solid`, `snake`, `rainbow`, `breath`, `gradient`, `shallow-breath` |
-| `brightness`, `speed` | `0`–`1` |
-| `magic` | `0`–1, an uncharacterized firmware field — exposed for tinkerers |
-| `on_exit` | `off` (default — blanks the pad and hands it back, like the vendor app does on quit), `breath`, `leave`. Applied however FreeMicro stops: Ctrl-C, `launchctl bootout`, logout, `pkill` |
+| `brightness`, `speed` | `0` - `1` |
+| `magic` | `0` - 1, an uncharacterized firmware field - exposed for tinkerers |
+| `on_exit` | `off` (default - blanks the pad and hands it back, like the vendor app does on quit), `breath`, `leave`. Applied however FreeMicro stops: Ctrl-C, `launchctl bootout`, logout, `pkill` |
 | `auto_dim_seconds` | `180` (default, the factory's three minutes). Seconds of inactivity before the pad goes **dark**, not dimmer. `0` (or `"off"`) never dims |
 | `auto_dim_alerts` | `false` (default): `waiting` and `error` stay lit through the timeout. `true` dims them too, which is exactly what the factory does |
 | `enabled` | `false` (the default) turns the LED renderer off entirely |
-| `method` | `rgbcfg` (default — the one verified to light this hardware) or `preview`, which firmware v0.4.1 accepts and ignores. Debugging only; see [`PROTOCOL.md`](PROTOCOL.md) |
-| `reassert` | When we re-send lighting something else overwrote — see [Running alongside the ChatGPT app](#running-alongside-the-chatgpt-app) |
+| `method` | `rgbcfg` (default - the one verified to light this hardware) or `preview`, which firmware v0.4.1 accepts and ignores. Debugging only; see [`PROTOCOL.md`](PROTOCOL.md) |
+| `reassert` | When we re-send lighting something else overwrote - see [Running alongside the ChatGPT app](#running-alongside-the-chatgpt-app) |
 
 States are `idle`, `working`, `waiting`, `done`, `error`. Any state you omit
 falls back to the **factory colour** for it, lit solid at full brightness: the
@@ -384,7 +383,7 @@ Two factory behaviours worth keeping if you edit these:
 
 * **Green decays.** It means *unread*, so it clears after
   `state.done_ttl_seconds` (default 180s, in `~/.freemicro/config.json`). Set it
-  to `0` to keep green until something else changes it — but the pad will then
+  to `0` to keep green until something else changes it - but the pad will then
   sit green forever after your first finished task, which the real hardware never
   does.
 * **The factory keeps most of the pad dark.** Default `zones` is `agent_keys`
@@ -418,8 +417,7 @@ freemicro lights done --color '#FF00FF' --effect breath --speed 0.8
 Both programs drive the same LEDs over the same channel and the last write wins.
 Three facts decide what to do about it:
 
-* **Your keys are never affected.** macOS shares this device for *reading* —
-  both apps see every press, detent and joystick sample. Only writes contend.
+* **Your keys are never affected.** macOS shares this device for *reading* - both apps see every press, detent and joystick sample. Only writes contend.
   Anything that disables key input because ChatGPT is open is a bug.
 * **The vendor app is event-driven, not continuous.** It writes when its own
   state changes and then stops, so FreeMicro's colours persist in between.
@@ -433,7 +431,7 @@ lighting whenever it plausibly lost the field:
 
 | Trigger | Why |
 |---|---|
-| ChatGPT quits | The field is ours again — this is the big one |
+| ChatGPT quits | The field is ours again - this is the big one |
 | The pad reconnects | It may have been repainted while we were gone |
 | `keymap.json` changes | Reloaded and re-applied without restarting `run` |
 | A slow heartbeat | **Off by default**, see below |
@@ -451,7 +449,7 @@ lighting whenever it plausibly lost the field:
 }
 ```
 
-The heartbeat defaults to `0` — off — on purpose. Every lighting call replaces
+The heartbeat defaults to `0` - off - on purpose. Every lighting call replaces
 the last, so a periodic re-send *restarts* animated effects: a `breath` idle
 colour would visibly hitch on every beat. It also puts permanent background
 traffic on the channel that carries your key events. Set it to `5` if you run
@@ -466,7 +464,7 @@ freemicro lights --coexist      # same as: freemicro lights --zones backlight
 freemicro lights --zones agent_keys    # back to per-key status
 ```
 
-The ChatGPT app keeps the **key backlight** dark essentially always — it flashes
+The ChatGPT app keeps the **key backlight** dark essentially always - it flashes
 it for ~4 s when you change the selected thread and otherwise sends all-off
 ([`FACTORY-DEFAULTS.md`](FACTORY-DEFAULTS.md) §1c). If FreeMicro drives only
 `backlight`, the two of you never write the same zone, so nothing can be
@@ -481,8 +479,8 @@ it.
 
 ## Runtime prefs (a different file)
 
-`~/.freemicro/config.json` holds runtime preferences — renderer `prefer` order,
-state TTL — and is separate from the pad config on purpose: one file is *yours to
+`~/.freemicro/config.json` holds runtime preferences - renderer `prefer` order,
+state TTL - and is separate from the pad config on purpose: one file is *yours to
 edit constantly*, the other you set once.
 
 ## Environment variables
@@ -491,5 +489,5 @@ edit constantly*, the other you set once.
 |---|---|
 | `FREEMICRO_HOME` | Move `~/.freemicro` somewhere else |
 | `FREEMICRO_KEYMAP` | Point at a specific pad config file |
-| `FREEMICRO_NO_DEVICE` | Pretend no pad is attached — keeps the test suite off your real hardware |
+| `FREEMICRO_NO_DEVICE` | Pretend no pad is attached - keeps the test suite off your real hardware |
 | `XDG_CONFIG_HOME` | Where the XDG search path looks |

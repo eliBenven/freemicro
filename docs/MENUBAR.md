@@ -1,7 +1,7 @@
 # The menu bar item
 
 The pad is an **ambient** device. Its whole value is that you see it without
-looking at it — so the thing on screen that reports on it should be ambient too.
+looking at it - so the thing on screen that reports on it should be ambient too.
 A window competing with your terminal is the wrong shape; a status item in the
 corner of the menu bar is the right one, and it is also the natural home for the
 two macOS permissions and the "is the ChatGPT app fighting me for the LEDs"
@@ -35,7 +35,7 @@ ChatGPT app is running
 * **The bar glyph** is the resolved agent state across every live session, in
   the state's colour. Shape carries the state as well as colour
   (`○ ◍ ◐ ● ✖`), so it still reads if you cannot tell amber from green.
-* **Connection and transport** — USB or Bluetooth, straight from IOKit's
+* **Connection and transport** - USB or Bluetooth, straight from IOKit's
   registry. No open, no permission needed, so it stays honest even when Input
   Monitoring is missing (in which case the row says so).
 * **Battery and firmware** come from a `device.status` round trip. See
@@ -43,7 +43,7 @@ ChatGPT app is running
 * **The warnings block only exists when something is wrong.** Each row is
   clickable and lands you where the fix is: the two permission rows open the
   exact System Settings pane, the ChatGPT row explains the conflict.
-* **LED Control** mirrors `lighting.enabled` in your pad config — the same
+* **LED Control** mirrors `lighting.enabled` in your pad config - the same
   opt-in `freemicro lights --enable` writes. It is the kill switch: FreeMicro
   never seizes the LEDs, and one click hands them back.
 * **Open Config** opens the bundled web editor when it is present, otherwise
@@ -63,14 +63,14 @@ So the menu bar reads, and almost never opens:
 
 | What | Where it comes from | Contention |
 | --- | --- | --- |
-| Agent state, session count | `StateStore` — files on disk | none |
+| Agent state, session count | `StateStore` - files on disk | none |
 | Connected, transport | `device_transport()`, an IOKit registry lookup | none |
 | Input Monitoring, Accessibility | `IOHIDCheckAccess`, `AXIsProcessTrusted` | none |
 | Pad owner | the daemon's `flock`, *tested* rather than read | none |
 | ChatGPT running | `pgrep`, on a 10-second clock | none |
 | Battery, firmware | `~/.freemicro/status.json`, or a `device.status` round trip **only when the lock proves nobody has the pad** | avoided |
 
-The one write is `lighting.enabled` in the pad config — deliberately the *file*
+The one write is `lighting.enabled` in the pad config - deliberately the *file*
 and not the hardware, because the file is the only thing the menu bar and
 whichever process holds the pad both agree on.
 
@@ -91,7 +91,7 @@ believe the pad was busy when it is not.
 Whoever has the pad is the right process to refresh it. When nobody does, the
 menu bar refreshes it itself, at most once a minute, on a background thread.
 A reading is shown with its age once it is over five minutes old, and is dropped
-entirely when the pad is not currently on the bus — a battery percentage from a
+entirely when the pad is not currently on the bus - a battery percentage from a
 pad that is no longer here is history, not status.
 
 ## No dependency, and why
@@ -105,7 +105,7 @@ and one menu would spend that for very little.
 So `menubar/cocoa.py` is a ~200-line ctypes bridge over the Objective-C runtime:
 send a message, make a string, make a colour, create one class at runtime so
 menu items have something to target. This is the house style rather than a new
-idea — `device/codex_micro.py` already drives IOKit through ctypes, and
+idea - `device/codex_micro.py` already drives IOKit through ctypes, and
 `permissions.py` calls `IOHIDCheckAccess` the same way.
 
 Three ctypes rules that file obeys, because breaking any of them crashes the
@@ -126,22 +126,21 @@ must keep working without it.
 
 ## Design notes
 
-* **Colour means exactly one thing** — the state dot. Warnings are plain text.
+* **Colour means exactly one thing** - the state dot. Warnings are plain text.
   A menu full of coloured glyphs is a debug panel.
 * **Idle has no colour.** The palette's idle is a near-black slate, invisible on
   a dark menu bar; idle is also the state we least want to draw the eye. It is
   drawn in whatever colour macOS uses for secondary text, so it is legible and
   quiet in both appearances.
 * **A disconnected pad is never an error.** It drops on sleep, on range, on a
-  nudged cable. The row says "Pad not connected" and the item goes on working —
-  agent state comes from the hook store, not the hardware, so the dot stays true
+  nudged cable. The row says "Pad not connected" and the item goes on working - agent state comes from the hook store, not the hardware, so the dot stays true
   while the pad is asleep. There is deliberately no badge on the bar glyph for a
   drop: it would blink several times a day and mean nothing.
 * **Rows appear only when they say something.** No "Battery: unknown". A row
   that is empty half the time teaches people to stop reading it.
 * **Nothing slow runs on the main thread.** `pgrep`, a `device.status` round
   trip against a pad that has just gone out of range, a config write, a daemon
-  restart — all on workers, with results marshalled back through a queue the run
+  restart - all on workers, with results marshalled back through a queue the run
   loop drains. The menu itself is rebuilt in `menuNeedsUpdate:`, immediately
   before it opens, so there is no work at all while it is closed.
 * **The run loop is ours**: `nextEventMatchingMask:untilDate:…` in a Python
@@ -158,7 +157,7 @@ must keep working without it.
 | `menubar/cocoa.py` | The ctypes Objective-C bridge. | macOS |
 | `menubar/app.py` | The status item and its run loop. | macOS, a GUI session |
 
-`import freemicro.menubar` never loads AppKit — `app` is imported lazily inside
+`import freemicro.menubar` never loads AppKit - `app` is imported lazily inside
 `main()`, so the package stays importable on Linux, in CI, and inside a launchd
 job with no GUI session. There is a test that asserts exactly this.
 
@@ -169,7 +168,7 @@ a pure function of a snapshot.
 ## Wiring required
 
 These are changes in files the menu bar does not own. Everything below is
-optional in the sense that the menu bar works without it — but each one closes a
+optional in the sense that the menu bar works without it - but each one closes a
 real gap.
 
 ### 1. The `freemicro menubar` subcommand (`src/freemicro/cli.py`)
@@ -208,7 +207,7 @@ Right now battery and firmware only appear when *nobody* holds the pad, because
 that is the only time the menu bar may open it. The process that already has the
 device is the right one to publish the reading.
 
-Do **not** call `device.self_test()` from the daemon's tick — it pumps the run
+Do **not** call `device.self_test()` from the daemon's tick - it pumps the run
 loop, and the daemon is already inside one. Instead, send the request from the
 tick and pick the reply up in the handler that is already running:
 
@@ -255,7 +254,7 @@ the daemon's reliability.
 
 `_run_pipeline` loads `padconfig` once at startup, so toggling **LED Control**
 from the menu is invisible to a running daemon. The menu bar currently works
-around this by running `launchctl kickstart -k` on the daemon — blunt, and
+around this by running `launchctl kickstart -k` on the daemon - blunt, and
 visible as a one-second gap in the pad's lighting.
 
 The proper fix is an mtime check in `tick()`: stat `pad.source` every couple of
@@ -277,7 +276,7 @@ def run_doctor_checks(config: Optional[Path] = None) -> list[DoctorCheck]: ...
 with `cmd_doctor` printing them and `menubar/checks.py` rendering them. The one
 behaviour the menu bar needs preserved: when `daemon.lock_holder()` shows another
 process owns the pad, the `device.status` round trip must be reported as
-*skipped, and why* rather than attempted — the menu bar must not fight for the
+*skipped, and why* rather than attempted - the menu bar must not fight for the
 device to run a diagnostic.
 
 ### 5. Optional: start it at login (`src/freemicro/daemon.py`)
@@ -294,7 +293,7 @@ add it themselves, or just launch it from a terminal.
 * macOS only. On anything else `freemicro menubar` prints why and exits 2.
 * It needs a GUI session. Running it over SSH, or from a LaunchDaemon rather
   than a LaunchAgent, gets you no status item.
-* Battery and firmware are as fresh as whoever last held the pad — see the
+* Battery and firmware are as fresh as whoever last held the pad - see the
   status cache above, and wiring item 2.
 * Toggling **LED Control** restarts a running daemon so it re-reads the config.
   Wiring item 3 removes that.

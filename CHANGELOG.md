@@ -137,7 +137,7 @@ The layers that predate the hardware work, and are still the backbone:
   drives the writable LED renderers through the state sequence (Path A from
   `docs/LED-STRATEGY.md`), captures a human verdict (did the Agent Keys move?
   per-key or global? app-quit needed?), and writes a report for the capability
-  DB. Uses only the documented VIA/QMK path — no firmware, no proprietary
+  DB. Uses only the documented VIA/QMK path - no firmware, no proprietary
   protocol.
 - **CLI** (`freemicro`): `detect`, `install`, `hook`, `demo`, `emit`, `render`,
   `renderers`, `status`. Hooks are installed with an absolute interpreter path
