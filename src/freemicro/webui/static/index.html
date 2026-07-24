@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>FreeMicro - pad configuration</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23304FFE'/%3E%3Ccircle cx='4' cy='4' r='1.6' fill='%23fff'/%3E%3Crect x='6.6' y='2.6' width='2.8' height='2.8' rx='.8' fill='%23fff'/%3E%3Ccircle cx='12' cy='4' r='1.6' fill='%23fff'/%3E%3Crect x='2.6' y='6.6' width='10.8' height='2.8' rx='.8' fill='%23fff' opacity='.8'/%3E%3Crect x='2.6' y='10.6' width='10.8' height='2.8' rx='.8' fill='%23fff' opacity='.5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<!--
+  The pad is the interface.
+
+  Everything on this page is either the picture of the pad, a caption for it, or
+  one of three global settings. Anything else lives behind a click on the thing
+  it belongs to - a key, a colour - or behind Advanced. The previous version put
+  presets, action kinds, parameters, keycaps, five lighting states, zones,
+  methods, policies, slots and joystick geometry on screen at the same visual
+  weight, and the owner's verdict was "a million fields and a million ways to do
+  everything". Each control was defensible; all of them together were not.
+-->
+
+<header class="bar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <span class="brand-name">FreeMicro</span>
+  </div>
+  <div class="bar-actions">
+    <span id="dirty-dot" class="dirty" hidden>unsaved</span>
+    <button id="revert" class="btn ghost" type="button" hidden>Revert</button>
+    <button id="save" class="btn primary" type="button" hidden>Save</button>
+  </div>
+</header>
+
+<!--
+  A running server can outlive its own code: Python holds imported modules in
+  memory, so a UI left open through an update serves the old API while the
+  browser loads the new app.js straight off disk. That mismatch has produced a
+  404 on a route that exists, an "unknown action" for an action that exists,
+  and a pad diagram with every keycap glyph silently missing. It gets a
+  blocking panel, not a strip you can scroll past.
+-->
+<div id="stale" class="stale" role="alertdialog" aria-modal="true" hidden></div>
+
+<div id="fatal" class="fatal" role="alert" hidden></div>
+<div id="restart" class="banner warn" role="status" hidden></div>
+<div id="banner" class="banner" role="status" hidden></div>
+
+<main>
+  <p id="status" class="status" role="status"></p>
+
+  <div id="pad" class="pad" aria-label="Codex Micro layout"></div>
+
+  <div class="under-pad">
+    <div id="state-chips" class="chips" aria-label="Light colour for each state"></div>
+    <button id="identify" class="btn tiny ghost" type="button">
+      Press a key to find it
+    </button>
+  </div>
+
+  <div id="capture-strip" class="capture-strip" hidden>
+    <span class="dot-live" aria-hidden="true"></span>
+    <span id="capture-text">Press anything on the pad.</span>
+    <span id="joy-readout" class="joy-readout"></span>
+    <button id="identify-stop" class="btn tiny ghost" type="button">Stop</button>
+  </div>
+
+  <section id="settings" class="settings"></section>
+
+  <details id="advanced" class="advanced">
+    <summary>Advanced</summary>
+    <div id="advanced-body"></div>
+  </details>
+
+  <p class="footnote">
+    Everything is stored in <code id="config-path"></code>. You can edit it by
+    hand - see <code>docs/CUSTOMIZING.md</code> - and saving here keeps the
+    previous version alongside it.
+  </p>
+</main>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-scrim" data-close="yes"></div>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-head">
+      <h2 id="modal-title"></h2>
+      <button id="modal-close" class="btn tiny ghost" type="button" aria-label="Close">✕</button>
+    </div>
+    <div id="modal-body" class="modal-body"></div>
+  </div>
+</div>
+
+<datalist id="installed-apps"></datalist>
+<datalist id="live-projects"></datalist>
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
