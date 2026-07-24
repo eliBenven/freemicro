@@ -132,7 +132,7 @@ import signal
 import threading
 import time
 import weakref
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple
 
 from freemicro.agentkeys import AgentSlot, SlotResolver
 from freemicro.device import Device, close_shared, shared_device
@@ -158,6 +158,9 @@ from freemicro.padconfig import (
 from freemicro.padconfig import load as load_padconfig
 from freemicro.renderers.base import Renderer, register
 from freemicro.state.engine import AgentState
+
+if TYPE_CHECKING:  # a type-only import: only used in annotations
+    from freemicro.state.engine import SessionState
 
 #: How long to wait after a failed write before trying the next one, in
 #: seconds, clamped at the last step. This is the vendor's own transport
@@ -443,12 +446,18 @@ class MicroLedsRenderer(Renderer):
                 self._store = None
         return self._store
 
-    def slots(self) -> Optional[List[AgentSlot]]:
+    def slots(
+        self, sessions: "Optional[List[SessionState]]" = None
+    ) -> Optional[List[AgentSlot]]:
         """The six slots as they should be lit, or ``None`` to mirror.
 
         ``None`` means "fall back to the single-colour behaviour", which is
         what ``policy: mirror`` asks for and also what happens when there is no
         session store to read.
+
+        ``sessions`` is the already-read session list from this tick, if the
+        caller has one; passing it avoids a second directory scan. When it is
+        ``None`` the store is read here as before.
         """
         config = self.config.agent_keys
         if config.mirrors or not self.lighting.drives_agent_keys:
@@ -467,7 +476,9 @@ class MicroLedsRenderer(Renderer):
             # saw lit, even across a restart or a second process.
             self._resolver.seed(slot_cache.load())
         try:
-            resolved = self._resolver.resolve(store.sessions())
+            if sessions is None:
+                sessions = store.sessions()
+            resolved = self._resolver.resolve(sessions)
         except Exception:  # noqa: BLE001 - an unreadable store must not go dark
             return None
         self._publish(self._resolver.previous)
@@ -498,7 +509,9 @@ class MicroLedsRenderer(Renderer):
             self._device = shared_device()
         return self._device is not None
 
-    def render(self, state: AgentState) -> None:
+    def render(
+        self, state: AgentState, sessions: "Optional[List[SessionState]]" = None
+    ) -> None:
         """Send this state's lighting. A no-op if nothing changed.
 
         Skipping unchanged frames is not just an optimisation: each lighting
@@ -509,6 +522,12 @@ class MicroLedsRenderer(Renderer):
         six slots - because a slot can change state while the winning state
         does not (project A finishes while project B is still working).
 
+        ``sessions`` lets the run loop hand in the session list it already read
+        this tick (via ``StateStore.resolved_and_sessions``), so the pad is not
+        painted from a second, independent scan of the state directory that
+        could disagree with the state just computed. Omitted, the renderer reads
+        the store itself, so it still works when driven standalone.
+
         This is also the auto-dim clock. Nothing else ticks often enough to be
         one, and the alternative - a timer thread writing to the pad behind the
         run loop's back - would put a second writer on the channel that carries
@@ -517,7 +536,7 @@ class MicroLedsRenderer(Renderer):
         if self._device is None or not self.lighting.enabled:
             return
         now = self._clock()
-        slots = self.slots()
+        slots = self.slots(sessions)
         overlay = self._overlay
         frame = self._frame_key(state, slots, overlay)
         if frame != self._model:

@@ -394,16 +394,40 @@ def _log_raw_event(event: dict, state) -> None:
 
 
 def cmd_hook(args: argparse.Namespace) -> int:
-    cfg = Config.load()
+    """Claude Code lifecycle hook: read one event, update the state store.
+
+    This is the one command that runs unattended *inside* Claude Code's own hook
+    execution, so nothing it does may surface to the user's agent - not a
+    traceback, not a nonzero exit. The parse is guarded, and so is everything
+    after it: reading the config or writing the state can fail when ``~/.freemicro``
+    is full, read-only or missing, and on that day the hook must fail invisibly
+    rather than print a stack trace on every turn.
+
+    The guard lives here, not in :func:`main`, on purpose: ``main`` also runs the
+    interactive commands (``run``, ``doctor``, ``uninstall`` ...) where an error
+    *should* surface with a real message and a nonzero exit. "Fail silently" is a
+    property of the hook execution context, and only this command runs in it.
+    """
     try:
         event = json.load(sys.stdin)
     except (ValueError, OSError):
         return 0  # Never break Claude Code because of a hook parse error.
+    try:
+        _apply_hook_event(event)
+    except Exception as exc:  # noqa: BLE001 - a hook must never break the agent
+        # One diagnostic line on stderr (which Claude Code does not treat as
+        # failure), then a clean exit. Never a traceback, never nonzero.
+        print(f"freemicro hook: {exc}", file=sys.stderr)
+    return 0
 
+
+def _apply_hook_event(event: dict) -> None:
+    """Classify one hook event and fold it into the state store. May raise."""
+    cfg = Config.load()
     state = classify(event)
     _log_raw_event(event, state)
     if state is None:
-        return 0
+        return
 
     store = _store(cfg)
     session = session_id_of(event)
@@ -438,7 +462,6 @@ def cmd_hook(args: argparse.Namespace) -> int:
             cwd=str(event.get("cwd", "")),
             signals=signals,
         )
-    return 0
 
 
 def cmd_emit(args: argparse.Namespace) -> int:
@@ -885,7 +908,7 @@ def _print_activity_lights(pad) -> None:
     underneath about when it goes out. A user who never reads them is the user
     who later reports that "the mic light is wrong".
     """
-    from freemicro.input.actions import HOLD_KINDS
+    from freemicro.input.actions import HOLD_KINDS, is_latching
 
     lit = pad.activity_lights()
     if not lit:
@@ -895,6 +918,18 @@ def _print_activity_lights(pad) -> None:
         print(f"  {input_id:9} {action.label:16} {action.light.describe()}")
     for input_id, action in lit:
         timeout = action.light.timeout_seconds
+        if is_latching(action):
+            # A latch is the one binding whose light outlives the key going up:
+            # it tracks recording, not the switch, so say that instead.
+            print(
+                f"  {input_id}: on while recording - the whole time you hold to "
+                f"talk, or across a\n    tap-tap latch until you tap to stop. "
+                f"FreeMicro drives the toggle, so it\n    always knows when "
+                f"recording ends and the light is honest. A dropped pad\n    "
+                f"takes it down at once; a lost stop clears from the clock after "
+                f"{timeout:g}s."
+            )
+            continue
         print(
             f"  {input_id}: on from the key going down until it comes back "
             f"up.\n    If that key-up is never reported - a Bluetooth drop "
@@ -1956,6 +1991,12 @@ def _run_pipeline(
         renderers = []
         last = None
         owner.attach(None)
+        # A latching push-to-talk left a dictation app recording; the pad going
+        # away is the one moment we know for certain the key can no longer stop
+        # it, so send the toggle-off tap now rather than wait out a timeout. The
+        # same guarantee release_all() gives the modifier keys a hold leaves down.
+        for dropped_latch in bridge.stop_latches("the pad disconnected"):
+            _print_dispatch(dropped_latch)
         # A key on a pad that is gone is not held. Said here rather than left to
         # the overlay's timeout because this is the common way a release goes
         # missing, and it is the one case we do not have to guess about.
@@ -2002,13 +2043,18 @@ def _run_pipeline(
                     # `device.stream` unschedule its input-report callback and
                     # close the pad before anyone calls execv.
                     raise staleness.RestartRequested()
-        state = store.resolved_state()
+        # One directory scan for both the winning state and the session list,
+        # rather than resolved_state() here and store.sessions() again inside
+        # the renderer. At the 1s poll that is a scan a second saved; more
+        # importantly the pad and the state line cannot be drawn from two
+        # separate reads that disagree.
+        state, sessions = store.resolved_and_sessions()
         live = overlay.current
         for renderer in renderers:
             set_overlay = getattr(renderer, "set_overlay", None)
             if callable(set_overlay):
                 set_overlay(live)
-            renderer.render(state)
+            renderer.render(state, sessions)
         if state != last:
             # Unconditional. This one line is the whole of what the screen
             # renderer ever delivered, and it is the only thing that tells you
@@ -2147,7 +2193,7 @@ def build_parser() -> argparse.ArgumentParser:
     dn.add_argument("--config", help="path to a pad config")
     dn.add_argument("--dry-run", action="store_true",
                     help="with run: log key presses instead of delivering them")
-    dn.add_argument("--interval", type=float, default=0.25,
+    dn.add_argument("--interval", type=float, default=1.0,
                     help="with run: how often to poll agent state")
     dn.add_argument("--seconds", type=float, default=0.0,
                     help="with run: stop after N seconds (0 = forever)")
@@ -2192,7 +2238,7 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--config", help=f"path to a pad config ({padconfig.FILENAME})")
     rn.add_argument("--dry-run", action="store_true",
                     help="log key presses instead of delivering them")
-    rn.add_argument("--interval", type=float, default=0.25,
+    rn.add_argument("--interval", type=float, default=1.0,
                     help="how often to poll agent state, in seconds")
     rn.add_argument("--seconds", type=float, default=0.0,
                     help="stop after N seconds (0 = run until Ctrl-C)")

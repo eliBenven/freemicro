@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, List, Optional
 
 from freemicro.state.engine import AgentState
+
+if TYPE_CHECKING:  # type-only, used solely in annotations
+    from freemicro.state.engine import SessionState
 
 # Canonical RGB for each state. Renderers that can't do per-key colour still
 # use these for a global colour, and the menu bar draws its dot from them.
@@ -48,8 +52,15 @@ class Renderer(ABC):
         """Return True if this renderer can actually display state now."""
 
     @abstractmethod
-    def render(self, state: AgentState) -> None:
-        """Display ``state``. Must be safe to call repeatedly."""
+    def render(
+        self, state: AgentState, sessions: Optional[List["SessionState"]] = None
+    ) -> None:
+        """Display ``state``. Must be safe to call repeatedly.
+
+        ``sessions`` is an optional hand-off of the session list a caller has
+        already read this tick, so a renderer that needs per-session detail can
+        skip re-reading the store. A renderer that ignores it is still correct.
+        """
 
     def close(self) -> None:
         """Release any resources. Safe to call more than once."""

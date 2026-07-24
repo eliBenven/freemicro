@@ -276,6 +276,35 @@ def test_repeated_renders_do_not_resend():
     assert len(device.sent) > count
 
 
+def test_render_uses_the_handed_in_sessions_instead_of_rescanning():
+    """The run loop reads sessions once and hands them to the renderer.
+
+    Passing them in must stop the renderer scanning the store a second time,
+    and rendering without them must fall back to reading the store, so the
+    renderer still works when driven standalone.
+    """
+    class CountingStore:
+        def __init__(self):
+            self.scans = 0
+
+        def sessions(self):
+            self.scans += 1
+            return []
+
+    # The shipped default already resolves per-project slots (mirrors is False,
+    # agent keys are driven), so slots() reaches the store.
+    store = CountingStore()
+    renderer = MicroLedsRenderer(
+        device=FakeDevice(), config=load_default(), store=store
+    )
+
+    renderer.slots(sessions=[])
+    assert store.scans == 0, "handed sessions but scanned the store anyway"
+
+    renderer.slots()
+    assert store.scans == 1, "no sessions handed in, but the store was not read"
+
+
 def test_a_dropped_pad_does_not_crash_and_does_not_latch_lighting_off():
     """One failed write used to kill lighting for the life of the process."""
     device = FakeDevice(fail=True)
