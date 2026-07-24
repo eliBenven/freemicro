@@ -532,7 +532,7 @@ written by the probe. The cycle never starts:
 
 ```
 $ ls ~/.freemicro/tk-probe.json
-ls: /Users/Eli/.freemicro/tk-probe.json: No such file or directory
+ls: /Users/e/.freemicro/tk-probe.json: No such file or directory
 ```
 
 So `ScreenRenderer._ensure_window()` returns `False` on every machine on the
