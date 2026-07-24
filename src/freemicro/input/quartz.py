@@ -263,40 +263,69 @@ def hold_chord(keycode: int, modifiers, down: bool) -> None:
     app asking "is Ctrl+Cmd held right now?" is asking about the modifier
     keys, and flags on a single ``o`` event do not answer that question.
 
+    The flags on every event describe the modifier state **at that instant**:
+    on the way down they accumulate (each modifier key-down carries itself and
+    everything already held), on the way up they *decrease* - each modifier
+    key-up carries the modifiers still held after it lets go, and the last one
+    carries nothing. That decreasing release is not cosmetic: a modifier key-up
+    posted with the wrong flags (0 skipped entirely, or the modifier's own flag
+    left on by the event's default) leaves macOS believing the modifier is still
+    down. That is the "control stuck for seconds after a mic hold" bug - the next
+    Return becomes Ctrl+Return and the next click a right-click. See
+    :func:`key_event`, which now always sets the flags it is given.
+
     Every key pressed here is registered before it is posted, so that a
     failure halfway through a chord still leaves the rest recoverable by
     :func:`release_all`.
     """
     flags = 0
-    codes = []
+    mods: List[Tuple[int, int]] = []  # (keycode, flag) in press order
     for name in modifiers:
         code = MODIFIER_KEY_CODES.get(name)
+        flag = MODIFIER_FLAGS.get(name, 0)
         if code is not None:
-            codes.append(code)
-        flag = MODIFIER_FLAGS.get(name)
+            mods.append((code, flag))
         if flag:
             flags |= flag
 
     if down:
         install_release_guard()
         with _held_lock:
-            _held.extend(codes)
+            _held.extend(code for code, _ in mods)
             _held.append(keycode)
-        for code in codes:                      # modifiers first…
-            key_event(code, True, flags)
-        key_event(keycode, True, flags)         # …then the key
+        held = 0
+        for code, flag in mods:                 # modifiers first, accumulating…
+            held |= flag
+            key_event(code, True, held)
+        key_event(keycode, True, flags)         # …then the key, full chord held
     else:
-        key_event(keycode, False, flags)        # key first…
-        for code in reversed(codes):            # …then modifiers, in reverse
-            key_event(code, False, 0)
+        # Key up first, with every modifier still down. Then the modifiers in
+        # reverse, each key-up declaring the flags that remain held after it -
+        # so macOS's modifier state stays consistent at every step and the final
+        # key-up says "nothing held" (flags 0), explicitly.
+        key_event(keycode, False, flags)
+        remaining = flags
+        for code, flag in reversed(mods):
+            remaining &= ~flag
+            key_event(code, False, remaining)
         with _held_lock:
-            for code in codes + [keycode]:
+            for code in [c for c, _ in mods] + [keycode]:
                 if code in _held:
                     _held.remove(code)
 
 
 def key_event(keycode: int, down: bool, flags: int = 0) -> None:
-    """Post one key-down or key-up, with modifier ``flags`` applied."""
+    """Post one key-down or key-up, with modifier ``flags`` set **explicitly**.
+
+    The flags are always applied, ``0`` included. That last word is the whole
+    fix for the stuck-modifier bug: ``CGEventCreateKeyboardEvent`` for a modifier
+    keycode defaults the event's flags to include that modifier's *own* flag, so
+    a key-up posted without calling ``CGEventSetFlags`` declares "this modifier
+    is still down" and macOS never clears it. The old ``if flags:`` guard skipped
+    the call precisely when ``flags`` was ``0`` - the modifier releases - which
+    is exactly when it had to run. ``flags=0`` means "no modifiers active now",
+    and it must be posted, not skipped.
+    """
     assert _cg is not None and _cf is not None
     source = _source()
     event = _cg.CGEventCreateKeyboardEvent(source, ctypes.c_uint16(keycode), down)
@@ -304,8 +333,7 @@ def key_event(keycode: int, down: bool, flags: int = 0) -> None:
         if source:
             _cf.CFRelease(source)
         raise OSError("CGEventCreateKeyboardEvent failed")
-    if flags:
-        _cg.CGEventSetFlags(event, ctypes.c_uint64(flags))
+    _cg.CGEventSetFlags(event, ctypes.c_uint64(flags))
     _post(event)
     if source:
         _cf.CFRelease(source)

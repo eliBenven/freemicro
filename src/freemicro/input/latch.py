@@ -50,12 +50,20 @@ LATCH_WINDOW_SECONDS = 0.35
 START = "start"
 STOP = "stop"
 
+#: The one thing :class:`DoubleTapMachine` tells its caller to do: send a single
+#: tap of the *second* shortcut. Named apart from ``START``/``STOP`` because it
+#: is a different gesture with a different contract - see the class.
+FIRE = "fire"
+
 # States.
 IDLE = "idle"
 PRESSED = "pressed"
 WAITING = "waiting"
 LATCHED = "latched"
 SUPPRESSING = "suppressing"
+#: :class:`DoubleTapMachine` only: the second tap is down, ``FIRE`` already
+#: emitted, and its own key-up is all that is left of the gesture.
+ARMED = "armed"
 
 #: The states in which the dictation app is recording.
 _RECORDING_STATES = frozenset({PRESSED, WAITING, LATCHED})
@@ -163,10 +171,122 @@ class LatchMachine:
         return [STOP] if was else []
 
 
+class DoubleTapMachine:
+    """Detects a double-tap on a key that is *also* a real physical hold.
+
+    A plain ``hold`` with a ``double_tap`` combo is push-to-talk first: the pad
+    key presses ``key`` the instant it goes down and releases it on key-up, and
+    that path is left exactly as it was (:class:`LatchMachine` is not involved -
+    a double-tap hold never taps ``key``, it truly holds it). This machine sits
+    *beside* that hold and watches the timing only, so it can fire one tap of a
+    **second, different** shortcut when it sees two quick presses.
+
+    Why it can share the plain-hold path rather than replace it
+    -----------------------------------------------------------
+    The physical hold must stay instant: the pad cannot wait 350 ms to find out
+    whether a second tap is coming without ruining push-to-talk, so it does not.
+    The accepted cost is that the *first* tap of a double-tap briefly holds
+    ``key`` (a sub-window blip) before the second tap arrives. That is harmless:
+    the second shortcut is meant for a *toggle*-mode app, which ignores the
+    push-to-talk shortcut, and a push-to-talk app records nothing meaningful in
+    under 350 ms. See :meth:`freemicro.input.bridge.Bridge._run`.
+
+    When it fires
+    -------------
+    On the **second press**, not its release: that is the first moment the
+    gesture is unambiguous (a second key-down inside the window), and the first
+    tap has already been released, so the modifiers are clean and the tap of the
+    second shortcut goes out without ``key`` held over it. Firing on the release
+    instead would couple the tap to how long the second press is held - a "tap,
+    then hold to talk" would fire the toggle only when the long hold ended, which
+    is not what either gesture means.
+
+    Past two taps
+    -------------
+    Each *completed pair* fires once and then disarms: a triple-tap fires once
+    (the third press starts a fresh, incomplete pair), a quadruple-tap fires
+    twice (on then off, a coherent toggle round-trip). It never fires twice for
+    three taps, which would leave a toggle in the wrong state.
+
+    No timer, on purpose
+    --------------------
+    The waiting window's only consumer is the *next* press, and it is resolved by
+    comparing timestamps there (:meth:`press`), so nothing happens on expiry that
+    a wakeup would be needed for: no key is held by this machine, no light is
+    driven by it. A stale ``WAITING`` costs nothing and cannot mis-fire, because
+    a late press past the window is treated as a fresh first tap. Same injectable
+    ``now`` discipline as :class:`LatchMachine`; :meth:`tick` is provided for
+    symmetry and tests but the bridge needs no thread for it.
+    """
+
+    def __init__(self, window: float = LATCH_WINDOW_SECONDS) -> None:
+        self.window = window
+        self.state = IDLE
+        #: When the waiting window lapses, or ``None``. Read by :meth:`tick` and
+        #: by :meth:`press` to decide whether a second press is still in time.
+        self.deadline: Optional[float] = None
+        self._pressed_at = 0.0
+
+    def press(self, now: float) -> List[str]:
+        """A pad key-down. ``[FIRE]`` when it completes a double-tap."""
+        if (
+            self.state == WAITING
+            and self.deadline is not None
+            and now < self.deadline
+        ):
+            # The second tap, inside the window: the double-tap is recognised.
+            # Fire once and wait out this press's own key-up before another pair
+            # can begin, so a third tap cannot fire it a second time.
+            self.state = ARMED
+            self.deadline = None
+            return [FIRE]
+        # Anything else - a first tap, or a second press after the window - opens
+        # a fresh pair. A lapsed WAITING lands here too, which is the whole of the
+        # expiry logic: no timer required.
+        self.state = PRESSED
+        self._pressed_at = now
+        self.deadline = None
+        return []
+
+    def release(self, now: float) -> List[str]:
+        """A pad key-up. Advances the gesture; never emits."""
+        if self.state == PRESSED:
+            if now - self._pressed_at < self.window:
+                # A quick tap: open the window for a possible second one.
+                self.state = WAITING
+                self.deadline = now + self.window
+            else:
+                # Held past the window: a real push-to-talk hold, not a tap. The
+                # physical hold ran the whole time (the bridge owns that); as a
+                # double-tap candidate this press is simply over.
+                self.state = IDLE
+                self.deadline = None
+            return []
+        if self.state == ARMED:
+            # The second tap's key-up: the pair is complete and consumed.
+            self.state = IDLE
+            self.deadline = None
+        return []
+
+    def tick(self, now: float) -> List[str]:
+        """Lapse a waiting window. The bridge relies on :meth:`press` instead."""
+        if (
+            self.state == WAITING
+            and self.deadline is not None
+            and now >= self.deadline
+        ):
+            self.state = IDLE
+            self.deadline = None
+        return []
+
+
 __all__ = [
+    "ARMED",
+    "FIRE",
     "IDLE",
     "LATCHED",
     "LATCH_WINDOW_SECONDS",
+    "DoubleTapMachine",
     "LatchMachine",
     "PRESSED",
     "START",

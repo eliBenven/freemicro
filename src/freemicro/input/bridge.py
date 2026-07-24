@@ -59,6 +59,7 @@ from freemicro.input.actions import (
     Action,
     ActionError,
     Backend,
+    double_tap_combo,
     is_latching,
     perform,
     release,
@@ -66,6 +67,7 @@ from freemicro.input.actions import (
 from freemicro.input import latch as latchmod
 from freemicro.input.pointer import Pointer, PointerVector
 from freemicro.padconfig import (
+    DEFAULT_ACTIVITY_TIMEOUT,
     ENCODER_TICKS,
     JoystickConfig,
     PadConfig,
@@ -82,6 +84,27 @@ from freemicro.padconfig import (
 
 #: Monotonic, never the wall clock: an NTP step must not expire a settle window.
 _monotonic = time.monotonic
+
+#: How long a *physical* ``hold`` may stay down before the bridge lets go of it
+#: on its own, as a backstop for a lost key-up.
+#:
+#: A ``hold`` presses real modifier keys and holds them until the pad reports the
+#: release. That release can be lost mid-session - a Bluetooth blip while the key
+#: is held - and nothing in the clean-exit paths (:func:`quartz.release_all`,
+#: :meth:`Bridge.release_held_keys`, close, reload, disconnect) covers a drop
+#: during *normal operation*. Left stuck, macOS believes Ctrl+Cmd are down: every
+#: trackpad click becomes a right-click and every other pad key is suppressed.
+#:
+#: **120 seconds**, deliberately: comfortably longer than the longest real
+#: push-to-talk hold (speaking one long sentence is 20-30 s, so this is over
+#: four times that and cannot cut off someone genuinely still talking), short
+#: enough to bound the damage, and **equal to** :data:`DEFAULT_ACTIVITY_TIMEOUT`
+#: so the physical hold and the activity light recover on the same clock rather
+#: than at two different times. It is only ever the honest last resort: a
+#: repeated key-down reconciles a lost release *instantly* (see
+#: :meth:`Bridge._reconcile_stale_hold`), so the cap matters only when a held key
+#: is never touched again.
+DEFAULT_MAX_HOLD_SECONDS = DEFAULT_ACTIVITY_TIMEOUT
 
 
 def _one(dispatch: Optional["Dispatch"]) -> List["Dispatch"]:
@@ -123,6 +146,10 @@ class Dispatch:
     #: standing by to complete. Without this the press prints as "unmapped",
     #: which is the opposite of the truth.
     chord: str = ""
+    #: This dispatch is the bridge recovering a stuck physical ``hold`` whose
+    #: key-up was lost, not a key the user pressed. Surfaced in the log because a
+    #: silent auto-recovery teaches nothing. Not an error: ``ok`` stays true.
+    stuck_release: bool = False
 
     @property
     def bound(self) -> bool:
@@ -134,6 +161,8 @@ class Dispatch:
         return bool(self.suppressed_by)
 
     def describe(self) -> str:
+        if self.stuck_release:
+            return f"released a stuck hold on {self.input_id} - its key-up was lost"
         if self.action is None:
             if self.chord:
                 return f"chord key - held, ready for {self.chord}"
@@ -371,9 +400,14 @@ class Bridge:
         autostart: bool = True,
         on_dispatch: Optional[Callable[[Dispatch], None]] = None,
         on_activity: Optional[Callable[[str, Optional[Any]], None]] = None,
+        max_hold_seconds: Optional[float] = None,
     ) -> None:
         self.backend = backend
         self.clock = clock or _monotonic
+        #: The physical-hold backstop. See :data:`DEFAULT_MAX_HOLD_SECONDS`.
+        self.max_hold_seconds = (
+            DEFAULT_MAX_HOLD_SECONDS if max_hold_seconds is None else max_hold_seconds
+        )
         #: Called with ``(input_id, light)`` when a binding that carries a
         #: ``light`` goes live, and with ``(input_id, None)`` when it stops.
         #: ``light`` is the config's
@@ -392,6 +426,14 @@ class Bridge:
         self._deliver = threading.Lock()
         #: input id -> the ``hold`` action currently physically down.
         self._holding: Dict[str, Action] = {}
+        #: input id -> when its physical hold went down, for the max-hold cap.
+        #: Moves in lock-step with :attr:`_holding`.
+        self._hold_started: Dict[str, float] = {}
+        #: input id -> its double-tap detector, for a ``hold`` that also fires a
+        #: second shortcut on a double-tap. Empty unless a binding opts in. The
+        #: physical hold is untouched; this only watches the timing. See
+        #: :class:`freemicro.input.latch.DoubleTapMachine`.
+        self._doubletap: Dict[str, "latchmod.DoubleTapMachine"] = {}
         #: input ids whose ``light`` we have declared live and not yet retired.
         self._lit: Dict[str, bool] = {}
         #: Presses we refused; their releases must be refused to match.
@@ -421,6 +463,13 @@ class Bridge:
         self.latch_timer = SettleTimer(
             self._latch_expire, clock=self.clock, sleep=sleep,
             autostart=autostart, name="freemicro-latch",
+        )
+        #: A third timer, same discipline, for the max-hold cap: it wakes to let
+        #: go of a physical ``hold`` whose key-up was lost and never came. Kept
+        #: apart from the other two so the chord and latch paths are unchanged.
+        self.hold_timer = SettleTimer(
+            self._hold_expire, clock=self.clock, sleep=sleep,
+            autostart=autostart, name="freemicro-hold",
         )
         self.config = config  # via the setter: builds the chord index
         self._joystick = JoystickTracker(config.joystick)
@@ -460,6 +509,10 @@ class Bridge:
             self._unresolved.clear()
             self._chorded.clear()
             self._open_chords.clear()
+            # A double-tap detector points at the old binding's timing; a reload
+            # may have rebound or deleted the key. It holds nothing, so dropping
+            # it strands nothing, and the next press rebuilds it.
+            self._doubletap.clear()
         self.settle.schedule(None)
 
     @property
@@ -511,7 +564,9 @@ class Bridge:
         self.release_lights()
         with self._lock:
             self._holding.clear()
+            self._hold_started.clear()
             self._suppressed.clear()
+        self.hold_timer.schedule(None)
         try:
             return self.backend.release_held_keys()
         except Exception:  # noqa: BLE001 - shutdown must not fail on this
@@ -531,10 +586,12 @@ class Bridge:
         """
         self.settle.stop()
         self.latch_timer.stop()
+        self.hold_timer.stop()
         with self._lock:
             self._unresolved.clear()
             self._chorded.clear()
             self._open_chords.clear()
+            self._doubletap.clear()
             del self._deferred[:]
         self.release_held_keys()
         self.pointer.close()
@@ -679,9 +736,20 @@ class Bridge:
             with self._lock:
                 if self._suppressed.pop(input_id, False):
                     # We never sent the press, so sending the release would be
-                    # a key-up for a key that was never down.
+                    # a key-up for a key that was never down. The double-tap
+                    # detector was not advanced on the suppressed press either,
+                    # so it must not see this key-up.
                     return None
                 self._holding.pop(input_id, None)
+                self._hold_started.pop(input_id, None)
+            self._schedule_hold_cap()
+            # A double-tap hold watches its own timing beside the physical hold.
+            # The key-up is half the gesture: a quick tap opens the window, the
+            # second tap's key-up closes a completed pair. Nothing is emitted on
+            # release - the second shortcut fires on the second *press*.
+            machine = self._doubletap.get(input_id)
+            if machine is not None:
+                machine.release(self.clock())
             if action is None or action.kind not in HOLD_KINDS:
                 return None
             try:
@@ -694,6 +762,13 @@ class Bridge:
         if action is None:
             return Dispatch(input_id=input_id)
 
+        # A fresh key-down for a key we already believe is physically held is
+        # proof its key-up was lost: two downs with no up between them cannot
+        # both be real. Let go of the stale hold before starting the new press,
+        # so suppression ends and the light clears at once rather than waiting
+        # out the cap. Definitive, not a guess, so it always runs here.
+        self._reconcile_stale_hold(input_id)
+
         with self._lock:
             blocker = self._blocking_hold(action)
             if blocker is not None:
@@ -702,6 +777,7 @@ class Bridge:
                 # Registered before it is delivered, so a hold that fails
                 # halfway is still something we know to let go of.
                 self._holding[input_id] = action
+                self._hold_started[input_id] = self.clock()
             if blocker is None and action.light is not None:
                 self._lit[input_id] = True
         if blocker is not None:
@@ -712,6 +788,13 @@ class Bridge:
                 suppressed_by=blocker[0],
                 holding=blocker[1],
             )
+        if action.kind in MODIFIER_HOLDING_KINDS:
+            self._schedule_hold_cap()
+        # A double-tap hold fires its *second* shortcut here, on the press that
+        # completes two quick taps - and before the physical hold goes down just
+        # below, so the first tap is already released and the modifiers are clean
+        # for it. The hold itself is never delayed: push-to-talk stays instant.
+        self._maybe_double_tap(input_id, action)
         if action.light is not None:
             # Before delivery, for the same reason `_holding` is: the light
             # says "this key is down", which is already true, and a hold that
@@ -737,10 +820,132 @@ class Bridge:
         except ActionError as exc:
             with self._lock:
                 self._holding.pop(input_id, None)
+                self._hold_started.pop(input_id, None)
+            self._schedule_hold_cap()
             # It did not happen, so the pad must stop saying it did.
             self._end_light(input_id)
             return Dispatch(input_id=input_id, action=action, ok=False, error=str(exc))
         return Dispatch(input_id=input_id, action=action)
+
+    # -- lost-release backstops ------------------------------------------
+
+    def _emit(self, dispatch: Dispatch) -> None:
+        """Surface a dispatch produced off the return path (timer or recovery).
+
+        The same routing :meth:`_expire` and :meth:`_latch_expire` use: straight
+        to ``on_dispatch`` when a reader is wired, otherwise queued for the next
+        :meth:`drain`. It is how an auto-recovery reaches the log instead of
+        happening in silence.
+        """
+        if self.on_dispatch is not None:
+            self.on_dispatch(dispatch)
+        else:
+            with self._lock:
+                self._deferred.append(dispatch)
+
+    def _force_release_hold(self, input_id: str, action: Action) -> None:
+        """Let go of one physical hold now: the key, the state and the light.
+
+        Idempotent - releasing a key that is already up is a no-op to the OS -
+        and it clears the bridge's own idea of the hold so suppression stops and
+        the light goes down. The counterpart, per binding, of
+        :meth:`release_held_keys`. Never raises: it runs from a backstop.
+        """
+        with self._lock:
+            self._holding.pop(input_id, None)
+            self._hold_started.pop(input_id, None)
+            self._doubletap.pop(input_id, None)
+        try:
+            with self._deliver:
+                release(action, self.backend)
+        except ActionError:
+            pass  # a stuck key is the worse outcome; take the light down anyway
+        self._end_light(input_id)
+
+    def _reconcile_stale_hold(self, input_id: str) -> None:
+        """Recover a hold whose key-up was lost, on its own fresh key-down.
+
+        Called at the top of a press: if we still believe this key is held, its
+        previous release never arrived, and this new down is the proof. Release
+        the stale hold and say so in the log, then let the press proceed. Does
+        nothing for a key that is not currently held, so a normal press - and the
+        second press of an ordinary double-tap, whose first release *did* arrive
+        - never trips it.
+        """
+        with self._lock:
+            stale = self._holding.get(input_id)
+        if stale is None:
+            return
+        self._force_release_hold(input_id, stale)
+        self._schedule_hold_cap()
+        self._emit(Dispatch(input_id=input_id, action=stale, stuck_release=True))
+
+    def _schedule_hold_cap(self) -> None:
+        """Point the hold timer at the earliest hold that could time out.
+
+        ``None`` when nothing is held, which parks the timer. Cheap and called
+        on every hold register and release, so the cap always reflects the
+        oldest live hold.
+        """
+        with self._lock:
+            started = list(self._hold_started.values())
+        earliest = min(started) if started else None
+        self.hold_timer.schedule(
+            None if earliest is None else earliest + self.max_hold_seconds
+        )
+
+    def _hold_expire(self) -> None:
+        """The hold timer fired: release every hold past the cap. Timer thread.
+
+        The backstop for a lost key-up on a key nothing touches again. A hold
+        still legitimately down is cut here too - the cap cannot tell the two
+        apart - which is why it is generous (see :data:`DEFAULT_MAX_HOLD_SECONDS`)
+        and why the repeated-key-down reconcile exists to catch the common case
+        long before this. Each recovery is logged, the same shape as a latch stop
+        the timer produces.
+        """
+        now = self.clock()
+        with self._lock:
+            due = [
+                (input_id, action)
+                for input_id, action in self._holding.items()
+                if input_id in self._hold_started
+                and now - self._hold_started[input_id] >= self.max_hold_seconds
+            ]
+        for input_id, action in due:
+            self._force_release_hold(input_id, action)
+            self._emit(Dispatch(input_id=input_id, action=action, stuck_release=True))
+        self._schedule_hold_cap()
+
+    # -- double-tap on a physical hold -----------------------------------
+
+    def _maybe_double_tap(self, input_id: str, action: Action) -> None:
+        """Fire the second shortcut if this press completes a double-tap.
+
+        Runs on the press path *before* the physical hold goes down, so the tap
+        of the second combo goes out with clean modifiers (the first tap of the
+        pair is already released). The physical hold is never delayed for this -
+        push-to-talk stays instant - which is why the first tap of a double-tap
+        briefly holds ``key``; that blip is harmless and documented on
+        :class:`freemicro.input.latch.DoubleTapMachine`. The detector only fires
+        the extra tap; it drives no light, because it cannot see the toggle
+        app's state and lighting it would be a guess.
+        """
+        combo = double_tap_combo(action)
+        if combo is None:
+            return
+        machine = self._doubletap.get(input_id)
+        if machine is None:
+            machine = self._doubletap[input_id] = latchmod.DoubleTapMachine()
+        if latchmod.FIRE not in machine.press(self.clock()):
+            return
+        try:
+            with self._deliver:
+                self.backend.press_key(combo)
+        except ActionError:
+            # A double-tap that fails to deliver simply does not toggle; one
+            # missed tap must not derail the physical hold that follows it.
+            pass
 
     def _blocking_hold(self, action: Action) -> Optional[Tuple[str, str]]:
         """The held binding that must stop ``action``, or ``None``.
@@ -1119,6 +1324,7 @@ def joystick_line(
 
 
 __all__ = [
+    "DEFAULT_MAX_HOLD_SECONDS",
     "MODIFIER_HOLDING_KINDS",
     "MODIFIER_SAFE_KINDS",
     "Bridge",

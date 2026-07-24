@@ -67,7 +67,7 @@ of lines) and is ignored by the loader; `light` is
 |---|---|---|---|
 | `text` | `text` | `submit` | Types the text. `submit: true` presses Return after. |
 | `key` | `key` | - | Presses a keystroke. |
-| `hold` | `key` | `latch` | Holds the key down for as long as you hold the pad key. True push-to-talk. `latch: true` instead taps the key (for a toggle app): tap-tap keeps recording, tap again stops. See [the mic key](#the-mic-key--push-to-talk). |
+| `hold` | `key` | `latch`, `double_tap` | Holds the key down for as long as you hold the pad key. True push-to-talk. `latch: true` instead taps the key (for a toggle app): tap-tap keeps recording, tap again stops. `double_tap: <combo>` keeps the real hold and *also* fires a second, different shortcut on a double-tap. See [the mic key](#the-mic-key--push-to-talk). |
 | `shell` | `command` | `cwd`, `wait` | Runs a shell command. Fire-and-forget unless `wait: true`. |
 | `applescript` | `script` | - | Runs arbitrary AppleScript. The escape hatch. |
 | `app` | `name` | `cycle` | Focuses an app. `cycle: true` cycles its windows if it's already frontmost. |
@@ -222,6 +222,46 @@ stuck-modifier hazard even across a latch that lasts minutes. Every threshold is
 350 ms - the vendor's double-tap window ([`FACTORY-DEFAULTS.md`](FACTORY-DEFAULTS.md)
 §8). Latch needs the CGEvent backend and an input with a release, so it is a
 load error on the dial detents and joystick flicks.
+
+#### One key, two dictation shortcuts (`double_tap`)
+
+You can make a single mic key do push-to-talk on a **hold** *and* fire a
+**second, different** shortcut on a **double-tap**. Add `double_tap` to a plain
+`hold`:
+
+```json
+"ACT10": { "action": "hold", "key": "ctrl+cmd+o", "double_tap": "ctrl+cmd+u" }
+```
+
+* **Hold** the pad key → `ctrl+cmd+o` is physically held for as long as you hold,
+  released when you let go. This is the plain push-to-talk hold, unchanged.
+* **Double-tap** the pad key (two quick presses within 350 ms) → one tap
+  (press-and-release, *not* a hold) of `ctrl+cmd+u`.
+
+The recipe it exists for is **two Wispr Flow shortcuts in two modes on one key**:
+set `Ctrl+Cmd+O` as Wispr's **push-to-talk (hold)** shortcut, and bind
+`Ctrl+Cmd+U` in Wispr's **toggle** area. Then a hold talks in hold mode and a
+double-tap flips the toggle-mode dictation on or off.
+
+The hold is **never delayed** to watch for a second tap - that would put a
+350 ms lag before push-to-talk starts recording, which would ruin it - so the
+first tap of a double-tap briefly holds `ctrl+cmd+o` for under the window. That
+blip is harmless: a toggle-mode app ignores its push-to-talk shortcut, and a
+push-to-talk app records nothing meaningful in under 350 ms. The double-tap fires
+on the **second press** (the moment the gesture is unambiguous and the first tap
+is already released, so the second shortcut goes out with clean modifiers). It
+fires **once per completed pair**: a triple-tap fires it once, a quadruple-tap
+twice (on, then off).
+
+The pad's `light`, if you add one, tracks the **hold** only - it comes on while
+the key is down, exactly as for a plain hold. A double-tap does **not** light the
+pad: the second shortcut targets a toggle app whose recording state FreeMicro
+cannot see, so lighting it would be a guess.
+
+`double_tap` and `latch` are two different models of the same gesture and cannot
+be combined on one binding (a load error says so). Like `latch`, it needs an
+input with a real release, so it is a load error on the dial detents and
+joystick flicks.
 
 If you'd rather have the pad launch the app instead of toggling it, use a shell
 action: `{"action": "shell", "command": "open -a 'Wispr Flow'"}`.

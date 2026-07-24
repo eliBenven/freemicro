@@ -823,17 +823,60 @@ def _latch_flag(params: Mapping[str, Any]) -> bool:
     return bool(params.get("latch"))
 
 
+def _double_tap_of(params: Mapping[str, Any]) -> Optional[str]:
+    """The *second* shortcut a ``hold`` fires on a double-tap, or ``None``.
+
+    A double-tap hold keeps the plain physical hold for push-to-talk (an app in
+    hold mode) and, on two quick presses, sends one tap of this different combo -
+    for a toggle-mode app whose shortcut you bind separately. Two apps, two
+    modes, one pad key. The hold of ``key`` is never delayed to disambiguate the
+    double-tap (that would ruin push-to-talk), so the first tap of a double-tap
+    briefly holds ``key`` for under the 350 ms window; that blip is harmless and
+    deliberate. See :class:`freemicro.input.latch.DoubleTapMachine`.
+    """
+    raw = params.get("double_tap")
+    return str(raw) if raw not in (None, "") else None
+
+
+def double_tap_combo(action: Optional[Action]) -> Optional[str]:
+    """The double-tap shortcut of a resolved ``hold`` binding, or ``None``.
+
+    The bridge's one question when routing a press: does this binding fire a
+    second shortcut on a double-tap? Kept here beside :func:`is_latching`, next
+    to the kind these are properties of.
+    """
+    if action is None or action.kind != "hold":
+        return None
+    return _double_tap_of(action.params)
+
+
 def _check_hold(params: Mapping[str, Any]) -> None:
     _check_key_combo(params)
     latch = params.get("latch")
     if latch is not None and not isinstance(latch, bool):
         raise ValueError(f"'latch' must be true or false, got {latch!r}")
+    double_tap = _double_tap_of(params)
+    if double_tap is not None:
+        if _latch_flag(params):
+            raise ValueError(
+                "'double_tap' and 'latch' cannot be combined on one binding: "
+                "they are two different models of the same key. 'latch' taps the "
+                "same shortcut for a toggle app; 'double_tap' keeps a real hold "
+                "for push-to-talk and fires a *second* shortcut on a double-tap. "
+                "Pick one."
+            )
+        parse_combo(double_tap)  # raises KeyNameError (a ValueError)
 
 
 def _describe_hold(act: Action) -> str:
     key = act.params.get("key")
     if _latch_flag(act.params):
         return f"tap {key} to record; tap-tap to keep recording, tap again to stop"
+    double_tap = _double_tap_of(act.params)
+    if double_tap is not None:
+        return (
+            f"hold {key} while pressed; double-tap sends {double_tap}"
+        )
     return f"hold {key} while pressed"
 
 
@@ -855,9 +898,10 @@ def is_latching(action: Optional[Action]) -> bool:
 @action(
     "hold",
     summary="Hold a key down while the pad key is held (true push-to-talk); "
-            "add latch=true for a toggle app: tap-tap keeps recording.",
+            "add latch=true for a toggle app: tap-tap keeps recording; add "
+            "double_tap=<combo> to also fire a second shortcut on a double-tap.",
     required=("key",),
-    optional=("latch",),
+    optional=("latch", "double_tap"),
     describe=_describe_hold,
     check=_check_hold,
     on_release=_release_hold,
@@ -992,6 +1036,7 @@ __all__ = [
     "action",
     "action_help",
     "best_backend",
+    "double_tap_combo",
     "is_latching",
     "perform",
     "release",

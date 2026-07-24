@@ -338,6 +338,13 @@ FIELD_HINTS: Dict[str, Dict[str, Any]] = {
         "help": "For a TOGGLE dictation app: tap-tap keeps recording, tap again "
                 "stops. Leave off for a push-to-talk app that records while held.",
     },
+    "double_tap": {
+        "widget": "combo",
+        "placeholder": "ctrl+cmd+u",
+        "help": "A SECOND shortcut this key sends on a double-tap, while hold "
+                "stays true push-to-talk. Bind hold in your app's push-to-talk "
+                "(hold) shortcut and this one in a toggle app's toggle shortcut.",
+    },
     "command": {"widget": "textarea", "placeholder": "gh pr create --fill"},
     "cwd": {"widget": "text", "placeholder": "~/code/project"},
     "wait": {"widget": "boolean", "help": "Block until the command exits"},

@@ -908,7 +908,7 @@ def _print_activity_lights(pad) -> None:
     underneath about when it goes out. A user who never reads them is the user
     who later reports that "the mic light is wrong".
     """
-    from freemicro.input.actions import HOLD_KINDS, is_latching
+    from freemicro.input.actions import HOLD_KINDS, double_tap_combo, is_latching
 
     lit = pad.activity_lights()
     if not lit:
@@ -944,6 +944,13 @@ def _print_activity_lights(pad) -> None:
                 "will not pretend to: for\n    dictation use {\"action\": "
                 "\"hold\"} and set your dictation app's\n    push-to-talk "
                 "(hold) shortcut to the same combo."
+            )
+        double_tap = double_tap_combo(action)
+        if double_tap is not None:
+            print(
+                f"    Double-tap sends {double_tap} as a one-off tap; the light "
+                "tracks the hold\n    only, not that toggle - FreeMicro cannot "
+                "see the toggle app's state, so\n    lighting it would be a guess."
             )
     if not pad.lighting.enabled:
         print("  (lighting is off, so none of this shows: "

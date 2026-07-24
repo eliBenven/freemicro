@@ -378,6 +378,86 @@ def test_a_normal_release_deregisters_the_chord():
         quartz.release_all()
 
 
+def test_releasing_a_chord_walks_the_flags_down_to_zero():
+    """The stuck-modifier bug in the act: after a mic hold releases, control was
+    left declared 'still down' because its key-up carried the wrong flags. Every
+    modifier key-up must carry the flags of what is *still* held, and the last
+    one must carry an explicit 0."""
+    from freemicro.input import quartz
+
+    posted = []
+    original_key_event = quartz.key_event
+    original_guard = quartz.install_release_guard
+    quartz.key_event = lambda code, down, flags=0: posted.append((code, down, flags))
+    quartz.install_release_guard = lambda: None
+    quartz.release_all()
+    ctrl = quartz.FLAG_CONTROL
+    cmd = quartz.FLAG_COMMAND
+    try:
+        quartz.hold_chord(31, ("control", "command"), down=True)  # ctrl+cmd+o
+        # Down: flags accumulate - control alone, then control+command, then the
+        # base key with the whole chord held.
+        assert posted == [
+            (59, True, ctrl),
+            (55, True, ctrl | cmd),
+            (31, True, ctrl | cmd),
+        ]
+        del posted[:]
+
+        quartz.hold_chord(31, ("control", "command"), down=False)
+        # Up: the base key with everything still held, then command releases
+        # leaving control, then control releases leaving nothing - a real 0, set
+        # explicitly, not skipped.
+        assert posted == [
+            (31, False, ctrl | cmd),
+            (55, False, ctrl),
+            (59, False, 0),
+        ]
+        assert posted[-1][2] == 0, "the last modifier key-up must declare 0"
+        assert quartz.held_keys() == ()
+    finally:
+        quartz.key_event = original_key_event
+        quartz.install_release_guard = original_guard
+        quartz.release_all()
+
+
+def test_key_event_sets_flags_explicitly_even_when_zero():
+    """The regression's root cause: ``if flags:`` skipped ``CGEventSetFlags`` for
+    flags 0, so a modifier key-up kept the event's default (its own flag) and
+    macOS never cleared it. The flags must always be set - 0 included."""
+    from freemicro.input import quartz
+
+    flag_calls = []
+
+    class FakeCG:
+        def CGEventSourceCreate(self, state):
+            return 1
+
+        def CGEventCreateKeyboardEvent(self, source, code, down):
+            return 42
+
+        def CGEventSetFlags(self, event, flags):
+            flag_calls.append(getattr(flags, "value", flags))
+
+        def CGEventPost(self, tap, event):
+            pass
+
+    class FakeCF:
+        def CFRelease(self, obj):
+            pass
+
+    original_cg, original_cf = quartz._cg, quartz._cf
+    quartz._cg, quartz._cf = FakeCG(), FakeCF()
+    try:
+        quartz.key_event(59, False, 0)          # a modifier key-up, no flags
+        assert flag_calls == [0], "flags 0 must be posted, not skipped"
+        flag_calls.clear()
+        quartz.key_event(31, True, quartz.FLAG_CONTROL | quartz.FLAG_COMMAND)
+        assert flag_calls == [quartz.FLAG_CONTROL | quartz.FLAG_COMMAND]
+    finally:
+        quartz._cg, quartz._cf = original_cg, original_cf
+
+
 def test_the_signal_path_releases_first_and_then_does_what_it_was_going_to():
     """A finally block is not enough: Python does not unwind one on a default
     SIGTERM, and os.execv never runs atexit. So the handler has to let go, and
