@@ -248,7 +248,7 @@ freemicro keys --list        # confirm what FreeMicro resolved
 "bindings": {
   "AG00":  { "action": "focus_session" },
   "ACT09": { "action": "key",   "key": "escape" },
-  "ACT10": { "action": "hold",  "key": "ctrl+option+cmd+d" },
+  "ACT10": { "action": "hold",  "key": "ctrl+cmd+o" },
   "ACT12": { "action": "app",   "name": "Ghostty", "cycle": true },
   "AG05":  { "action": "none" }
 },

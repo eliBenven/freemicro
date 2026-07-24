@@ -40,6 +40,11 @@ HOOK_EVENTS = (
     "UserPromptSubmit",
     "PreToolUse",
     "PostToolUse",
+    # Fires when the agent is about to compact its context. `state.hooks` grades
+    # it as working with a long grace, on the reasoning that a session mid
+    # compaction has not stopped. That grading is dead unless the event is
+    # actually registered here - Claude Code only fires the hooks we install.
+    "PreCompact",
     "Notification",
     "Stop",
     "SessionEnd",
