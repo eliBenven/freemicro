@@ -6,8 +6,8 @@ kinds of contribution and **one of them needs no code at all.**
 ## 🥇 The highest-value contribution: a hardware report
 
 FreeMicro's whole LED path hinges on facts we can only learn from physical
-hardware (see [`SPEC.md` §4](SPEC.md)). If you own a Codex Micro — or *any*
-VIA/QMK RGB pad — run the read-only probe and share the result:
+hardware (see [`SPEC.md` §4](SPEC.md)). If you own a Codex Micro - or *any*
+VIA/QMK RGB pad - run the read-only probe and share the result:
 
 ```sh
 pip install "freemicro[detect]"
@@ -36,27 +36,32 @@ ruff check .  # lint
 ```
 src/freemicro/
   state/      hooks -> normalized AgentState, per-session store (pure, tested)
-  renderers/  base registry + screen / busylight / micro-via / micro-qmk
+  renderers/  base registry + micro-leds (the pad's own LEDs)
+  device/     the pad's 0xFF00 vendor channel, shared by input and lighting
   detector/   read-only HID probe
-  input/      host-side preset loading
+  input/      pad events -> your bound actions
   cli.py      the `freemicro` command
 ```
 
 ### Principles
 
-1. **The alert never depends on the pad.** Any change to renderer selection
-   must keep the `screen` fallback reachable. There is a test for this; keep it
-   green.
-2. **Core stays dependency-free.** `hidapi` and `busylight-core` are *optional*
-   extras. Importing `freemicro` must work with neither installed.
+1. **The pad is the display, and it must say so.** FreeMicro once shipped four
+   fallback renderers so that "the alert never depends on the pad". The LEDs are
+   now verified on hardware over USB and Bluetooth, the fallbacks were deleted,
+   and no surface may claim to show agent state unless someone has watched it
+   do so. `freemicro run` prints each state change to the terminal; that line is
+   the whole of the non-pad output and it is not a fallback.
+2. **Core stays dependency-free.** `hidapi` is an *optional* extra, used only by
+   `freemicro detect`. Importing `freemicro` must work without it.
 3. **Hooks must never break Claude Code.** The `hook` command swallows its own
    errors and exits 0. A status light is not worth interrupting someone's
    session.
 4. **New agent? New file.** Adding Codex CLI / Cursor support should mean a new
    classifier in `state/`, not changes to the engine or renderers.
-5. **Experimental means experimental.** Hardware renderers stay `experimental =
-   True` and dormant (`available()` False) until validated on real hardware
-   with a capability-DB entry.
+5. **Experimental means experimental.** A hardware renderer stays `experimental
+   = True` and dormant (`available()` False) until validated on real hardware
+   with a capability-DB entry - and if it never gets validated, it gets deleted
+   rather than listed.
 
 ### Adding a renderer
 
@@ -73,12 +78,12 @@ and every renderer come along for free.
 ### Commit / PR
 
 - Keep PRs focused; one concern each.
-- Add or update tests — `pytest` must stay green.
+- Add or update tests - `pytest` must stay green.
 - Run `ruff check .` before pushing.
 - Be kind. See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 ## Reporting bugs / ideas
 
 Use the issue templates. For anything hardware-shaped, include your
-`freemicro detect --json` output — it's almost always the first thing we'll ask
+`freemicro detect --json` output - it's almost always the first thing we'll ask
 for.

@@ -5,30 +5,50 @@ build-backend = "hatchling.build"
 [project]
 name = "freemicro"
 version = "0.1.0"
-description = "Turn a macro pad into a live status light for Claude Code and any coding agent — drive the OpenAI Codex Micro's Agent-Key LEDs, VIA/QMK RGB pads, busylights, or your screen."
+description = "Turn the OpenAI Codex Micro into a live status light for Claude Code: one Agent Key per project, lit with that project's real state, and every key remappable."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
 authors = [{ name = "Eli Benveniste" }]
 keywords = [
-    "claude-code", "codex", "macropad", "qmk", "via", "hid", "rgb",
+    "claude-code", "codex", "codex-micro", "macropad", "hid", "rgb",
     "coding-agents", "developer-tools", "ambient-computing", "status-light",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    # Beta, not Alpha: the hook → state → LED loop is verified end to end on a
+    # physical unit and covered by a self-test anyone can re-run, the CLI is
+    # feature-complete for its stated scope, and the honest limits (one unit,
+    # one firmware, macOS-only pad support) are documented rather than implied
+    # by a status badge. Not "Production/Stable" until more than one pad and
+    # more than one firmware have been through it.
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
+    "Environment :: MacOS X",
     "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    # Pad support is macOS-only (IOKit). The state engine, the config loader
+    # and the hooks are portable, which is why POSIX/Windows are not excluded
+    # outright - but there is nothing to light without the pad.
+    "Operating System :: MacOS",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: User Interfaces",
+    "Topic :: System :: Hardware :: Hardware Drivers",
     "Topic :: Utilities",
 ]
 dependencies = []
 
 [project.optional-dependencies]
 detect = ["hidapi>=0.14"]
-busylight = ["busylight-core>=0.10"]
-all = ["hidapi>=0.14", "busylight-core>=0.10"]
+all = ["hidapi>=0.14"]
 dev = ["pytest>=7", "pytest-cov", "ruff"]
 
 [project.scripts]
@@ -38,9 +58,32 @@ freemicro = "freemicro.cli:main"
 Homepage = "https://github.com/eliBenven/freemicro"
 Repository = "https://github.com/eliBenven/freemicro"
 Issues = "https://github.com/eliBenven/freemicro/issues"
+Changelog = "https://github.com/eliBenven/freemicro/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/eliBenven/freemicro/blob/main/README.md"
+"Wire protocol" = "https://github.com/eliBenven/freemicro/blob/main/docs/PROTOCOL.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/freemicro"]
+# The shipped keymap is read at runtime (padconfig.DEFAULT_CONFIG_PATH), so it
+# has to be in the wheel - a `pip install` without it fails on first launch
+# with a missing-file error and no clue why. hatchling includes package data
+# by default; this is here so a future exclude rule can't quietly drop it.
+artifacts = ["freemicro/default_keymap.json"]
+
+[tool.hatch.build.targets.sdist]
+# Everything needed to build, test and verify a claim in the docs.
+include = [
+    "src/",
+    "tests/",
+    "docs/",
+    "hardware/",
+    "README.md",
+    "SPEC.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "LICENSE",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

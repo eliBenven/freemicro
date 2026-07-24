@@ -5,24 +5,166 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing in CI may touch real hardware, type into anything, or open a window.
+# FREEMICRO_NO_DEVICE makes the device layer behave as if no pad were attached
+# (tests/conftest.py sets it per-test as well - this is the belt to that's
+# braces, and it covers the steps that are not pytest).
+env:
+  FREEMICRO_NO_DEVICE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: ruff check
+        run: ruff check --output-format=github .
+
+  # The pure-logic layers - state engine, hook classifier, config parsing,
+  # protocol framing - must stay portable. If this job needs a macOS-only
+  # import to pass, something has leaked into the wrong layer.
+  test-linux:
+    name: linux · py${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-      - name: Lint
-        run: ruff check .
+        run: pip install -e ".[dev]"
       - name: Test
         run: pytest -q
+
+  # The product is macOS-only, so this is the job that actually exercises the
+  # IOKit, CGEvent and permissions paths. It runs headless: no pad, no
+  # synthetic keystrokes, and (see the tkinter step) no window.
+  test-macos:
+    name: macos · py${{ matrix.python-version }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is arm64. actions/setup-python has no arm64 build for
+        # 3.9/3.10, which is why those live in test-macos-legacy below.
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      # A test run that can reach a real pad would be able to repaint someone's
+      # LEDs - and on a self-hosted runner, that someone is a person. Prove the
+      # switch works before running the suite rather than trusting it.
+      - name: Verify the no-hardware switch is honoured
+        run: |
+          python - <<'PY'
+          import os
+          from freemicro import device
+          assert os.environ.get(device.ENV_NO_DEVICE) == "1", "env not set"
+          assert device.device_transport() is None, "transport leaked through"
+          assert device.device_present() is False, "device_present() leaked through"
+          assert device.shared_device() is None, "a device handle was opened"
+          print("no-hardware switch honoured")
+          PY
+
+      # FreeMicro no longer imports tkinter anywhere: the screen renderer was
+      # deleted, partly because tkinter.Tk() calls abort() from C on some
+      # macOS/Python combinations and no try/except can catch it. This step
+      # keeps it that way, on the platform where it bites.
+      - name: Verify nothing imports tkinter while collecting the suite
+        run: |
+          python - <<'PY'
+          import sys
+          import pytest
+          code = pytest.main(["-q", "--collect-only"])
+          if "tkinter" in sys.modules:
+              sys.exit("tkinter was imported during collection: nothing in "
+                       "FreeMicro may import Tk; it can abort() the process")
+          sys.exit(int(code))
+          PY
+
+      - name: Test
+        run: pytest -q
+
+      - name: Diagnostics bundle builds on this platform
+        run: |
+          python - <<'PY'
+          from freemicro import diagnostics
+          bundle = diagnostics.bundle(probe_device=False)
+          assert bundle["text"].startswith("freemicro ")
+          assert bundle["report"]["device"]["present"] is False
+          print(bundle["text"])
+          PY
+
+  # Supplementary: 3.9 and 3.10 on macOS need an x86_64 runner, because
+  # actions/setup-python publishes no macOS arm64 builds for them. Kept
+  # non-blocking on purpose - the pure-logic 3.9/3.10 coverage is in
+  # test-linux, and this job's only job is to catch a macOS-specific
+  # regression on an old interpreter. When macos-13 is retired, delete this
+  # job; do not delete the 3.9 entries in test-linux.
+  test-macos-legacy:
+    name: macos (x86_64) · py${{ matrix.python-version }}
+    runs-on: macos-13
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Test
+        run: pytest -q
+
+  # Catches packaging breakage on the PR that causes it rather than on release
+  # day: a missing package-data file (default_keymap.json, the web UI assets)
+  # only shows up in a built wheel installed somewhere clean.
+  package:
+    name: wheel builds and installs clean
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+      - name: Install the wheel into a clean venv and run it
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install dist/*.whl
+          /tmp/clean/bin/freemicro --version
+          /tmp/clean/bin/freemicro renderers
+          # The shipped default config must survive packaging.
+          /tmp/clean/bin/freemicro keys --list > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7

@@ -1,0 +1,176 @@
+name: Release
+
+# Two deliberately separate halves:
+#
+#   * Pushing a tag BUILDS and VERIFIES the artifacts and opens a DRAFT GitHub
+#     release. Nothing is published anywhere by pushing a tag.
+#   * Publishing to PyPI is a manual `workflow_dispatch` that additionally
+#     requires an environment approval. There is no path from `git push --tags`
+#     to a PyPI upload, on purpose: a tag is easy to push by accident and
+#     impossible to un-publish.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish to PyPI, e.g. v0.1.0"
+        required: true
+      confirm:
+        description: 'Type "publish to pypi" to confirm'
+        required: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  FREEMICRO_NO_DEVICE: "1"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: pip install build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: twine check
+        run: twine check --strict dist/*
+
+      # A tag that disagrees with pyproject.toml produces a release whose
+      # filename and contents say different things. Catch it here, before a
+      # human sees a green tick.
+      - name: Tag matches the packaged version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          tag = os.environ["TAG_NAME"].lstrip("v")
+          wheels = list(pathlib.Path("dist").glob("*.whl"))
+          if len(wheels) != 1:
+              sys.exit(f"expected exactly one wheel, found {wheels}")
+          built = wheels[0].name.split("-")[1]
+          if built != tag:
+              sys.exit(
+                  f"tag {tag!r} does not match the built version {built!r}. "
+                  "Bump the version in pyproject.toml and src/freemicro/"
+                  "__init__.py, or retag."
+              )
+          print(f"tag and package agree on {built}")
+          PY
+
+      # The one check that catches a missing package-data file: install the
+      # wheel somewhere with nothing else in it and actually run the thing.
+      - name: Install the wheel in a clean venv and smoke-test it
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/pip install "$(ls dist/*.whl)"
+          /tmp/verify/bin/freemicro --version
+          /tmp/verify/bin/freemicro renderers
+          /tmp/verify/bin/freemicro keys --list > /dev/null
+          /tmp/verify/bin/python -c "
+          import freemicro, freemicro.padconfig as pc
+          print('version', freemicro.__version__)
+          pad = pc.load_default()
+          assert pad.bindings, 'the shipped default keymap is missing'
+          print('default keymap OK:', len(pad.bindings), 'bindings')
+          "
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 30
+
+  draft-release:
+    name: draft GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      # Draft, never published automatically: a maintainer edits the notes
+      # from CHANGELOG.md and presses publish.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG_NAME" \
+            --draft \
+            --title "$TAG_NAME" \
+            --notes "Draft. Paste the $TAG_NAME section of CHANGELOG.md here before publishing." \
+            dist/*
+
+  publish-pypi:
+    name: publish to PyPI (manual approval)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Configure this environment in repository settings with a required
+    # reviewer. Until you do, this job runs as soon as it is dispatched — the
+    # confirmation string below is the only other gate.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/freemicro/
+    permissions:
+      id-token: write  # PyPI trusted publishing
+    steps:
+      # Both inputs are validated before anything uses them: the confirmation
+      # phrase because publishing is irreversible, and the tag because it ends
+      # up in a `ref:` — a workflow input is only as trustworthy as the least
+      # careful person who can dispatch it.
+      - name: Check the confirmation phrase and the tag
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          TAG_NAME: ${{ inputs.tag }}
+        run: |
+          if [ "$CONFIRM" != "publish to pypi" ]; then
+            echo "Confirmation phrase not given; refusing to publish." >&2
+            exit 1
+          fi
+          case "$TAG_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "Refusing: '$TAG_NAME' is not a vX.Y.Z tag." >&2; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Rebuild from the tag rather than trusting an artifact from another
+      # run: the thing that gets uploaded should be built from the thing that
+      # was tagged, in this job, with nothing in between.
+      - name: Build from the tag
+        run: |
+          pip install build twine
+          python -m build
+          twine check --strict dist/*
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          print-hash: true

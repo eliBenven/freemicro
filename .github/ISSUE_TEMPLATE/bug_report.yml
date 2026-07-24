@@ -1,30 +1,84 @@
 name: "🐛 Bug report"
-description: "Something isn't working as documented."
+description: "Something isn't working the way the docs say it should."
 labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        **Please run `freemicro doctor --report` and paste the output below.**
+        Nearly every FreeMicro bug comes down to one of: a missing macOS
+        permission, the wrong transport, a contending ChatGPT app, a config that
+        didn't parse, or a firmware we haven't seen. The report answers all five
+        at once, and it is **redacted** - the contents of your `shell` and
+        `applescript` bindings and any path outside your config directory are
+        replaced before it prints. Read it before you paste it anyway.
+
   - type: textarea
     id: what
     attributes:
       label: What happened?
-      description: What you did, what you expected, what you got.
+      description: What you did, what you expected, and what you got instead.
     validations:
       required: true
+
   - type: textarea
     id: repro
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. freemicro install
-        2. freemicro watch
-        3. ...
-  - type: textarea
-    id: env
+        1. freemicro lights --enable
+        2. freemicro run
+        3. press AG00 - nothing types
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
     attributes:
-      label: Environment
-      description: "OS, Python version, `freemicro --version`, and which renderer(s) were selected (`freemicro renderers`)."
+      label: Which part?
+      options:
+        - "Keys / input bridge (a key does nothing, or the wrong thing)"
+        - "LEDs / lighting"
+        - "Hooks - the state never changes"
+        - "Install / CLI / packaging"
+        - "Web UI"
+        - "Daemon"
+        - "Docs"
+        - "Something else / not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`freemicro doctor --report` output"
+      description: |
+        Run it and paste the whole thing. If `doctor --report` isn't in your
+        build yet, paste plain `freemicro doctor` plus `freemicro --version`
+        and your macOS version.
       render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: transport
+    attributes:
+      label: USB or Bluetooth?
+      description: "Both are supported, and they frame writes differently - it matters."
+      placeholder: "USB / Bluetooth / no pad attached"
+
   - type: textarea
     id: logs
     attributes:
       label: Relevant output
+      description: "Terminal output, or `freemicro daemon logs` if the daemon is running."
       render: shell
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Before you file
+      options:
+        - label: "I checked that the ChatGPT desktop app isn't also driving the pad."
+        - label: "I restarted my terminal after granting any macOS permission."
+        - label: "I removed anything private from the output above."

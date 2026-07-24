@@ -24,3 +24,6 @@ htmlcov/
 
 # FreeMicro runtime state (never commit a user's session store)
 .freemicro/
+
+# Browser-automation artifacts from UI verification
+.playwright-mcp/

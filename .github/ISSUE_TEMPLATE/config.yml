@@ -1,5 +1,11 @@
 blank_issues_enabled: true
 contact_links:
+  - name: 🔐 Found a security issue?
+    url: https://github.com/eliBenven/freemicro/security/advisories/new
+    about: Report it privately, not as a public issue. See SECURITY.md for scope - a config running its own shell commands is documented behaviour, not a vulnerability.
   - name: 📖 Read the design spec first
     url: https://github.com/eliBenven/freemicro/blob/main/SPEC.md
-    about: The four-layer architecture and the open hardware questions (M0).
+    about: The four-layer architecture and the open hardware questions.
+  - name: 🔌 The wire protocol
+    url: https://github.com/eliBenven/freemicro/blob/main/docs/PROTOCOL.md
+    about: What the pad actually speaks, verified on hardware. Read this before reporting that a write "succeeded" but nothing happened.

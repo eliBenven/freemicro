@@ -1,14 +1,23 @@
-name: "🔌 Hardware Report"
-description: "Share a `freemicro detect` capability report for your pad. This is the single most useful contribution."
-title: "[Hardware] <device name> — VID:PID"
+name: "🔌 Hardware report"
+description: "Your pad's VID/PID and firmware. The highest-value contribution to this project, and it needs no code."
+title: "[Hardware] <device> - <vid:pid> - fw <version>"
 labels: ["hardware-report"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks! This directly advances the project and grows the crowdsourced
-        capability database. The probe is **read-only** — it never writes to
-        your device.
+        **Everything FreeMicro knows came from one unit on firmware v0.4.1.**
+        That is the project's biggest blind spot. A second data point - even one
+        that says "identical, works fine" - is genuinely valuable, and a
+        *different* firmware version is the single most useful thing anyone can
+        send us.
+
+        Results feed [`hardware/capabilities.json`](https://github.com/eliBenven/freemicro/blob/main/hardware/capabilities.json)
+        and the known-good list in `src/freemicro/compat.py`.
+
+        The probe is **read-only** - `freemicro detect` enumerates HID devices
+        and never writes to one.
+
   - type: input
     id: device
     attributes:
@@ -16,33 +25,89 @@ body:
       placeholder: "OpenAI Codex Micro / Work Louder Creator Micro 2 / other pad"
     validations:
       required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      description: "`freemicro doctor` prints it, from the `device.status` reply. Say `unknown` if it never answered."
+      placeholder: "0.4.1"
+    validations:
+      required: true
+
+  - type: input
+    id: vidpid
+    attributes:
+      label: "VID:PID"
+      description: "From `freemicro detect`. Ours is 303a:8360."
+      placeholder: "303a:8360"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: compat_message
+    attributes:
+      label: Did FreeMicro flag your firmware as untested?
+      options:
+        - "Yes - it said newer-than-tested"
+        - "Yes - it said older-than-tested"
+        - "Yes - it couldn't parse the version"
+        - "No - it recognised my firmware"
+        - "Didn't see a message"
+    validations:
+      required: true
+
   - type: textarea
     id: detect
     attributes:
       label: "`freemicro detect --json` output"
-      description: "Run `pip install \"freemicro[detect]\"` then `freemicro detect --json` and paste the full output."
+      description: 'Run `pip install "freemicro[detect]"` then `freemicro detect --json` and paste the whole thing.'
       render: json
     validations:
       required: true
+
   - type: dropdown
-    id: raw_channel
+    id: transport
     attributes:
-      label: Raw 0xFF60 channel present?
-      options: ["yes", "no", "not sure"]
+      label: Which transports did you test?
+      options:
+        - "USB only"
+        - "Bluetooth only"
+        - "Both"
     validations:
       required: true
-  - type: dropdown
-    id: via
+
+  - type: checkboxes
+    id: works
     attributes:
-      label: Does usevia.app / Vial detect the pad?
-      options: ["yes — writable", "detected but read-only", "no", "did not try"]
+      label: What worked on your unit?
+      description: "Tick only what you actually saw. Blanks are data too."
+      options:
+        - label: "`freemicro doctor` got a `device.status` reply (the round-trip test)"
+        - label: "Key presses arrive - `freemicro keys --dry-run` shows ids"
+        - label: "The dial reports rotation (`ENC_CW` / `ENC_CC`), not just the press"
+        - label: "The thumbstick reports angle and distance"
+        - label: "`lights.preview` visibly changed the backlight or underglow"
+        - label: "`v.oai.thstatus` visibly changed the six Agent Keys"
+        - label: "`v.oai.rgbcfg` visibly changed anything (this is an open question - see docs/PROTOCOL.md)"
+
   - type: textarea
-    id: led_write
+    id: differences
     attributes:
-      label: "Did `freemicro render done` actually move the Agent-Key LEDs?"
-      description: "If you tried the write path, tell us what happened. Global colour vs per-key? Did you have to quit the ChatGPT desktop app first?"
+      label: Anything that behaved differently from the docs?
+      description: |
+        Different key ids, an extra input, a lighting call that stopped working,
+        a new method in a reply, different write framing - anything at all.
+        Contradicting `docs/PROTOCOL.md` is a useful result, not a problem.
+
   - type: input
-    id: firmware
+    id: purchase
     attributes:
-      label: Firmware / purchase date
-      placeholder: "shipping 2026-07, bought 2026-07-23"
+      label: Purchase / manufacture date
+      placeholder: "bought 2026-07, shipped 2026-06"
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "15.4"
