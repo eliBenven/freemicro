@@ -1,43 +1,72 @@
 # Adversarial design audit
 
-> Read on 2026-07-23, against the working tree as it stood at 20:55. Three other
-> agents were editing `input/**`, `padconfig.py`, `state/**`, `agentkeys.py` and
-> `webui/**` while this was written, so line numbers in those files may have
-> shifted by a few; every finding also names the symbol so it stays findable.
-> Nothing outside this file was changed.
+> Originally read on 2026-07-23 against the working tree at 20:55. **Reconciled
+> on 2026-07-24 against the current code:** most of the defects below have since
+> been fixed. Each finding now carries a status tag - **FIXED**, **OPEN** or
+> **PARTIAL** - and every FIXED entry cites the file that now handles it. The
+> prose describing what was wrong is kept on purpose; it just no longer asserts
+> a defect that is closed. The "Still open" list immediately below is the honest
+> remaining set.
 >
-> Method: read `PROTOCOL.md`, `FACTORY-DEFAULTS.md`, `AGENT-KEYS.md`,
-> `CUSTOMIZING.md`, `README.md`, then every module under `src/freemicro/`, then
-> the tests for the claims they make. Findings are grouped by the four failure
-> patterns. Anything I could not tie to a concrete user-visible consequence was
-> dropped rather than padded out.
+> Method of the original pass: read `PROTOCOL.md`, `FACTORY-DEFAULTS.md`,
+> `AGENT-KEYS.md`, `CUSTOMIZING.md`, `README.md`, then every module under
+> `src/freemicro/`, then the tests for the claims they make. Findings are grouped
+> by the four failure patterns.
 >
-> Two things the audit found already fixed and did not re-report: the session
-> store now keeps a record alive by pid instead of by clock
-> (`state/engine.py`, `ProcessLiveness`), and the web UI's `_store()` now passes
-> all four TTLs (`webui/api.py:56`). Both fixes are correct. Both are also
-> incomplete, because the second copy was fixed and the third, fourth and fifth
-> were not. See F2 and F3.
+> Note the doc reuses the labels F2, F3 and F4 across two patterns each; the
+> heading text disambiguates them, and the tags below are per-heading.
 
 ---
 
-## Top 10 most likely to be found next
+## Still open
 
-Ranked by probability of the owner hitting it in ordinary use times how bad it
-is when he does.
+The findings below are the ones still true in the code as of 2026-07-24, most
+important first. Everything not listed here has been fixed and is tagged
+**FIXED** in place, with the resolving file cited.
 
-| # | Finding | One-line symptom |
-|---|---|---|
-| 1 | [F1](#f1-a-hold-whose-release-never-arrives-leaves-the-key-physically-down) | Ctrl-C during push-to-talk leaves Ctrl and Cmd stuck down system-wide |
-| 2 | [F2](#f2-three-more-places-build-a-statestore-with-two-of-four-ttls) | `working_ttl_seconds: 0` does not switch the check off; `freemicro status` and the pad disagree |
-| 3 | [F3](#f3-the-led-renderers-slot-resolver-drops-two-of-three-ttls) | Agent Keys go white after 2 minutes no matter what the config says |
-| 4 | [F4](#f4-one-write-failure-kills-lighting-for-the-life-of-the-process-silently) | LEDs stop updating forever after one dropped write, with no message |
-| 5 | [F5](#f5-the-joystick-now-has-two-contradictory-up-directions-in-one-process) | Pointer goes up, `JOY_UP` binding fires down |
-| 6 | [F6](#f6-a-pointer-failure-is-swallowed-and-then-retried-forever) | Cursor does not move, nothing is printed, a thread is spawned per sample |
-| 7 | [F7](#f7-the-tuning-workflow-both-docs-promise-does-not-exist) | `keys --dry-run` prints no px/s, so `gamma` and `max_speed` cannot be tuned as documented |
-| 8 | [F8](#f8-the-mic-shortcut-is-in-four-places-and-the-two-in-the-docs-are-the-one-the-code-rejects) | README tells you to set a combo the web UI refuses as unregisterable |
-| 9 | [F9](#f9-freemicro-status-cannot-answer-the-two-questions-the-agent-keys-raise) | `status` shows session UUIDs, never which project is on which key |
-| 10 | [F10](#f10-a-hook-on-an-unwritable-or-full-disk-raises-into-claude-code) | Disk fills, every Claude Code turn reports a hook failure |
+1. **F16 - unbounded caches.** `focus._TTY_CACHE` (no eviction),
+   `ProcessLiveness._alive` (never pruned on process death),
+   `codex_micro._LIVE_CALLBACKS` (grows one ctypes callback per `stream()`), and
+   the `_mode` CFString that leaks when `Device.stream()` is called twice. The
+   only unbounded structures in a process meant to run for months.
+2. **F17 - interval scheduling on the wall clock.** `LightingOwner` was moved to
+   `time.monotonic`, but `ConfigWatcher`, `CodeWatcher` and `run_with_reconnect`
+   still schedule their intervals on `time.time()`, so a backwards clock
+   correction can stall the config watcher and the restart watcher. PARTIAL.
+3. **F15 - idle poll cost.** `--interval` still defaults to 0.25 s and each tick
+   still walks the state directory more than once and stats the whole package;
+   roughly four state scans a second at rest.
+4. **F3 (device) / F18 - the reconnect loop polls and does not back off.** Pad
+   presence is re-checked once a second instead of via the IOKit removal
+   callback, and after a drop the loop goes silent for a bare
+   `time.sleep(retry_interval)` with no `[1, 2, 5, 10]` s ladder.
+5. **Menubar double directory scan.** `menubar.status.resolved_state()` calls
+   `store.resolved_state()` and then `len(store.sessions())`, two full scans of
+   the state directory per menu-bar poll.
+6. **F6 - a pointer hard-failure is unsurfaced and retried per sample.** `Pointer`
+   now accepts an `on_error`, but `Bridge` still constructs it without one, and
+   `Pointer.update` restarts the loop on the next moving sample without checking
+   `loop.error`, so a machine where `move_mouse` cannot work spawns a thread per
+   sample. `doctor` still says only fn bindings and hold-to-talk break.
+7. **F9 - `freemicro status` cannot name a project.** It still prints
+   `state / session_id / age` with a raw UUID, and never uses `describe_claim()`
+   or the slot table, both of which exist.
+8. **F10 - a hook on a full or unwritable disk raises into Claude Code.**
+   `cmd_hook` guards only the JSON parse; `_store()` and `store.update()` are
+   unguarded and `main()` has no top-level handler.
+9. **F13 - two independent config watchers reload the same file** on different
+   paths (`ConfigWatcher` and `LightingOwner._check_config`).
+10. **F8 - the mic-shortcut docs still contradict the code.** The shipped default
+    is now `ctrl+cmd+o` on `ACT10`, but `README.md` and `docs/CUSTOMIZING.md`
+    still tell the reader to set the four-key combo the web UI refuses.
+11. **F4 (PreCompact) - a graded event that is never installed.** `PreCompact`
+    counts as a working event and gets a 600 s grace, but it is absent from
+    `hooks_install.HOOK_EVENTS`, so Claude Code never fires it.
+12. **F14 - coexistence heals in one direction only,** and `CUSTOMIZING.md`
+    oversells it as "heals itself".
+13. **F19 - a corrupt `config.json` is swallowed silently** and surfaced nowhere,
+    while a corrupt `keymap.json` is fatal.
+14. **F20 - `cmd_run` and `cmd_keys` call `lock.acquire()` without checking it.**
 
 ---
 
@@ -48,8 +77,21 @@ landed. What is left is smaller but real.
 
 ### F1. A `hold` whose release never arrives leaves the key physically down
 
-**Severity: severe.** This is the one the brief flagged as needing a specific
-check, and it is not handled anywhere.
+**FIXED.** Severity was severe: this was the one the brief flagged as needing a
+specific check, and at the time it was not handled anywhere.
+
+> **Resolved:** the process that presses the modifiers now guarantees the
+> key-ups on every exit path. `quartz.hold_chord` registers each held keycode in
+> a module-level `_held` list (`input/quartz.py:178-296`) and
+> `quartz.release_all()` sends the key-ups for all of them; `install_release_guard()`
+> chains `SIGINT`/`SIGTERM`/`SIGHUP` to `release_all()` and registers it with
+> `atexit` (`input/quartz.py:190-256`). On the bridge side,
+> `Bridge.release_held_keys()` and `Bridge.close()` clear the held state and call
+> the backend release (`input/bridge.py:455-495`), and `_run_pipeline`'s
+> `finally` now calls `bridge.close()` (`cli.py:1496`, also `cli.py:2054`). The
+> config-reload path releases before swapping via the `joystick` setter
+> (`input/bridge.py:436-453`). The four loss modes below are the record of what
+> was wrong.
 
 `Bridge.fire(input_id, pressed=False)` is the only path that releases a held
 chord (`src/freemicro/input/bridge.py:215-228`). It fires only when the pad
@@ -92,6 +134,14 @@ release is a fact we get for free from the config we already hold.
 
 ### F2 is in Pattern 2 but belongs here too
 
+**FIXED.**
+
+> **Resolved:** `PointerLoop.stop()` now calls `engine.reset()`, which clears
+> `_precision` (`input/pointer.py:381-398`, `211-218`), and `Bridge.close()`
+> calls `pointer.close()` -> `loop.stop()` on every exit path
+> (`input/bridge.py:476-495`), so a lost release no longer latches the cursor at
+> `precision_scale`. The original description follows.
+
 `joystick.precision_key` has the same shape as F1 in miniature. Precision mode
 latches on key-down and off on key-up
 (`src/freemicro/input/bridge.py:174-179`). Lose the release and the cursor is
@@ -104,6 +154,10 @@ proves the failure mode was understood; the disconnect case was not covered.
 **Severity: medium.** Same fix: clear it in `release_all()`.
 
 ### F3. Pad presence is polled once a second when IOKit will tell us
+
+**OPEN.** Confirmed: `run_with_reconnect`'s inner `_tick` still calls
+`device_present()` on a one-second wall-clock gate (`device/__init__.py:136-150`)
+and no IOKit removal callback is registered.
 
 `run_with_reconnect` calls `device_present()` every second
 (`src/freemicro/device/__init__.py:136-147`), and `device_present()` runs a full
@@ -124,6 +178,11 @@ a slow backstop at 10-30 s rather than 1 s.
 
 ### F4. `PreCompact` is classified but is never installed as a hook
 
+**OPEN.** Confirmed: `state/hooks.py:67` still counts `PreCompact` among the
+working events, and `hooks_install.HOOK_EVENTS` (`hooks_install.py:34-46`) still
+lists only `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
+`Notification`, `Stop`, `SessionEnd` - `PreCompact` is not among them.
+
 `state/hooks.py:65` counts `PreCompact` as a working event and
 `state/engine.py:140` gives it the 600-second tool grace, but `PreCompact` is
 not in `hooks_install.HOOK_EVENTS` (`src/freemicro/hooks_install.py:34-46`), so
@@ -143,9 +202,19 @@ underlying defect.
 
 ## Pattern 2: two copies of the same truth
 
-This is where the tree is weakest right now.
+Most of this pattern has now been collapsed to a single copy each. What remains
+open here is F13 (two config watchers) and the docs half of F8.
 
 ### F2. Three more places build a `StateStore` with two of four TTLs
+
+**FIXED.**
+
+> **Resolved:** there is one store-construction path now. `cli._store()` is a
+> thin call to `default_store(cfg)` (`cli.py:38-46`), `menubar.status.resolved_state()`
+> builds `default_store()` (`menubar/status.py:99-114`), and `default_store()`
+> passes all four TTLs (`state/engine.py:1276`). No surface hand-rolls a
+> two-of-four store any more, so `working_ttl_seconds: 0` is honoured everywhere
+> the store is read. The original description follows.
 
 The web UI's copy was found and fixed, with a docstring explaining exactly why it
 mattered (`src/freemicro/webui/api.py:56-81`). Three other copies were not
@@ -182,6 +251,14 @@ the hooks write." That sentence is now describing the present tense.
 
 ### F3. The LED renderer's slot resolver drops two of three TTLs
 
+**FIXED.**
+
+> **Resolved:** the renderer no longer hand-picks TTLs. It builds the resolver
+> with `SlotResolver.for_store(store, config=config)` (`renderers/micro_leds.py:465`),
+> a constructor that reads all of the store's TTLs off the store itself, so a
+> raised or disabled working TTL is honoured and cannot be silently undone by the
+> resolver. The original description follows.
+
 `src/freemicro/renderers/micro_leds.py:211-214`:
 
 ```python
@@ -209,6 +286,16 @@ the store and read them off it, so a fourth TTL added later cannot be forgotten
 a fifth time.
 
 ### F5. The joystick now has two contradictory "up" directions in one process
+
+**FIXED.**
+
+> **Resolved:** the discrete wheel was made to agree with the factory sector
+> table. `JOYSTICK_INPUTS` is now `("JOY_RIGHT", "JOY_DOWN", "JOY_LEFT", "JOY_UP")`
+> (`padconfig.py:89`), so pushing up (angle ~0.75) resolves to `JOY_UP`. The old
+> order is kept as `_LEGACY_JOYSTICK_INPUTS` only to detect and warn a user whose
+> file still carries it (`padconfig.py:95-96`, `1226-1230`). The test that
+> encoded the wrong convention was corrected too (see F22). The original
+> description follows.
 
 `src/freemicro/input/pointer.py:34-49` states the orientation plainly: angle
 0.75 is up, matching `FACTORY-DEFAULTS.md` §6 which was read out of the shipped
@@ -249,6 +336,13 @@ compatibility, it is a second copy waiting to fire.
 
 ### F8. The mic shortcut is in four places, and the two in the docs are the one the code rejects
 
+**OPEN (docs).** The code side is consistent: the shipped `default_keymap.json`
+now sets `ACT10` to `hold ctrl+cmd+o` and `ACT11` to `none`, and `starters.py`
+still refuses the four-key combo. But the docs were not reconciled -
+`README.md:251` still shows `"ACT10": { "action": "hold", "key": "ctrl+option+cmd+d" }`,
+and `docs/CUSTOMIZING.md` still tells the reader to bind `ctrl+option+cmd+d` on
+`ACT11` (`:183-199`). The instruction to set a combo the web UI rejects survives.
+
 | Source | Key | Combo |
 |---|---|---|
 | `src/freemicro/default_keymap.json` `ACT10` | ACT10 (ACT11 = `none`) | `ctrl+cmd+o` |
@@ -276,6 +370,15 @@ While you are in there, `README.md:228` and `CUSTOMIZING.md:121` say the mic is
 `ACT11`; the shipped default deliberately silences `ACT11` and acts on `ACT10`.
 
 ### F11. The LED fallback palette is not the factory palette the docs promise
+
+**FIXED.**
+
+> **Resolved:** there is one palette now. `padconfig.FACTORY_PALETTE`
+> (`padconfig.py:310`) holds the factory hex values and the shipped defaults are
+> derived from it (`padconfig.py:327`); `micro_leds` falls back to
+> `FACTORY_PALETTE` for any omitted state (`renderers/micro_leds.py:37`), so a
+> deleted `idle` block now falls back to factory white rather than the Apple
+> near-black. The original description follows.
 
 `renderers/base.py:11-17` defines `PALETTE` as Apple system colours:
 idle `(40,40,48)`, working `(0,122,255)`, waiting `(255,149,0)`, done
@@ -307,6 +410,15 @@ match the pad.)
 
 ### F12. `PROTOCOL.md` still tells the reader to use the method the code refuses to use
 
+**FIXED.**
+
+> **Resolved:** `docs/PROTOCOL.md` now speaks with one voice. The lighting table
+> marks `lights.preview` as "does nothing on v0.4.1; use `v.oai.rgbcfg`"
+> (`PROTOCOL.md:161`), and a boxed correction states plainly "Use `v.oai.*`, not
+> `lights.preview`" and records that the earlier opposite claim was wrong
+> (`PROTOCOL.md:178-189`). The contradicting "verified on hardware" and "open
+> question" passages are gone. The original description follows.
+
 `padconfig.py:88-97`, `micro_leds.py:9-18` and `default_keymap.json` all agree:
 `rgbcfg` works, `lights.preview` lights nothing on v0.4.1. `PROTOCOL.md` says
 this too, twice and emphatically (lines 161, 178-193). It then contradicts
@@ -332,6 +444,11 @@ returns `{"result": null}`, and does nothing.
 
 ### F13. Two independent config watchers reload the same file
 
+**OPEN.** Confirmed: `ConfigWatcher` is still created in `_run_pipeline`
+(`cli.py:1879-1880`, polled at `1941`) and `LightingOwner._check_config` still
+stats and reloads `config.source` independently (`lighting_owner.py:600`,
+`728`). Both remain, on different paths.
+
 `ConfigWatcher` (`src/freemicro/staleness.py:695-761`) and
 `LightingOwner._check_config` (`src/freemicro/lighting_owner.py:572-591`) both
 `stat` a config path each tick and both reload and re-apply it. `_run_pipeline`
@@ -352,6 +469,15 @@ new config to everyone including the lighting owner.
 ## Pattern 3: correct behaviour that is invisible
 
 ### F4. One write failure kills lighting for the life of the process, silently
+
+**FIXED.**
+
+> **Resolved:** the permanent latch is gone. `MicroLedsRenderer` now counts
+> consecutive failures and schedules a retry on the vendor's `[1, 2, 5, 10]` s
+> backoff ladder rather than setting a `_failed` flag that never clears
+> (`renderers/micro_leds.py:362-363`, `911-977`, ladder documented at
+> `:164`). It says so once on the first failure instead of once per tick, and a
+> later successful write clears the counter. The original description follows.
 
 `MicroLedsRenderer._send` sets `self._failed = True` on any exception from
 `device.send()` (`src/freemicro/renderers/micro_leds.py:388-395`). Nothing ever
@@ -378,6 +504,16 @@ successful `device.status` round trip or after a backoff. A permanent latch
 needs at minimum to say so once.
 
 ### F6. A pointer failure is swallowed, and then retried forever
+
+**OPEN (partial infrastructure).** `PointerLoop` now accepts an `on_error` and
+calls it when `step()` raises (`input/pointer.py:331-338`, `415-417`), but the
+wiring that would make it visible is still missing: `Bridge` constructs the
+`Pointer` with no `on_error` (`input/bridge.py:394`), and `Pointer.update`
+restarts the loop on the next moving sample without checking `loop.error`
+(`input/pointer.py:470-477`), so a machine where `move_mouse` hard-fails still
+spawns and kills a thread per sample. `doctor` still reports the Quartz-missing
+case as "Everything works except fn bindings and hold-to-talk" (`cli.py:1123`),
+which the `mouse` action and the default joystick mode contradict.
 
 `PointerLoop._run` catches any exception from `step()`, records it in
 `self.error`, calls `on_error` if there is one, and returns
@@ -413,6 +549,14 @@ loop's normal channel; do not auto-restart after a hard failure (check
 
 ### F7. The tuning workflow both docs promise does not exist
 
+**FIXED.**
+
+> **Resolved:** `keys --dry-run` now prints the velocity. The dry-run handler
+> calls `joystick_line(message, bridge)` (`cli.py:1474`), which in pointer mode
+> returns `bridge.pointer.preview(angle, distance).describe()` - the live px/s
+> next to the raw sample (`input/bridge.py:870-892`). `gamma` and `max_speed`
+> can now be tuned as the docstrings promise. The original description follows.
+
 `PointerVector.describe()` says it is *"Printed by `freemicro keys --dry-run` so
 `gamma` and `max_speed` can be chosen the only way they ever really get chosen:
 by feel, watching numbers move"* (`src/freemicro/input/pointer.py:117-119`), and
@@ -434,6 +578,11 @@ watch px/s in `--dry-run`. There is no px/s."*
 one-line change and the method already exists.
 
 ### F9. `freemicro status` cannot answer the two questions the Agent Keys raise
+
+**OPEN.** Confirmed against `cmd_status` (`cli.py:507-540`): it still prints
+`f"  {s.state.value:8} {s.session_id}  ({int(s.age())}s ago)"` - a raw UUID and
+`state.value` - and neither the slot table (`focus.current_slots()`) nor
+`describe_claim()` is wired in, though both exist. Liveness still prints first.
 
 `cmd_status` (`src/freemicro/cli.py:342-374`) prints liveness, the resolved
 state, and a list of `state / session_id / age`. Session ids are UUIDs. It never
@@ -461,6 +610,10 @@ project basename instead of the session id.
 
 ### F14. Coexistence only heals in one direction, and the docs oversell it
 
+**OPEN.** Confirmed: `LightingOwner._check_vendor` still reasserts only on the
+running -> not-running transition (`lighting_owner.py:556-570`), the heartbeat is
+still off by default, and `CUSTOMIZING.md` still presents this as "heals itself".
+
 `LightingOwner._check_vendor` reasserts on the transition running -> not running
 (`src/freemicro/lighting_owner.py:556-570`). While ChatGPT is *running*, nothing
 reasserts: the heartbeat is off by default and the renderer's frame dedupe
@@ -481,6 +634,14 @@ changes, and that `--coexist` is the only configuration with no repaint window.
 ---
 
 ## Pattern 4: unexamined constants
+
+**Mixed.** The table is kept as the provenance record. Two rows now point at
+fixed findings: the `PALETTE` row (see F11, now `FACTORY_PALETTE`) and the
+`JOYSTICK_INPUTS` order row (see F5, now the factory order). Still open from this
+table: `retry_interval` has no backoff ladder (see F18), `--interval` is still
+0.25 s (see F15), and `joystick.deadzone` is still allowed to be exactly `0`,
+which wedges the tracker (the "> 0" fix at the end of this section is not applied
+as of 2026-07-24).
 
 Every default in the tree, with provenance. "Invented" means I could find no
 measurement or `FACTORY-DEFAULTS.md` reference for it.
@@ -552,6 +713,10 @@ Nothing here has run for more than a couple of hours. What a week of
 
 ### F15. The idle cost is four full state-directory scans a second
 
+**OPEN.** Confirmed: `--interval` still defaults to 0.25 s (`cli.py:2150`,
+`2195`), and the per-tick work below is unchanged - the state directory is still
+scanned more than once per tick and `package_mtime()` still walks the package.
+
 At the default `--interval 0.25`, each tick of `_run_pipeline`
 (`src/freemicro/cli.py:1697-1729`) does:
 
@@ -587,6 +752,15 @@ the package directory's own mtime changed; (d) use the IOKit removal callback
 
 ### F16. Two caches and one list grow without bound
 
+**OPEN.** Confirmed on 2026-07-24, all four parts: `focus._TTY_CACHE`
+(`focus.py:119`) is still a plain dict with no eviction (only `clear_tty_cache`,
+test-only); `ProcessLiveness._alive` (`state/engine.py:652`) is still not pruned
+on death (`_started` is popped at `:676`, `_alive` is not); `_LIVE_CALLBACKS`
+(`codex_micro.py:309`) still grows one callback per `stream()` by design
+(`:481`); and `Device.stream()` still assigns `self._mode = _cfstr(...)` each call
+(`codex_micro.py:454`) releasing it only in `close()` (`:508-510`), so a second
+`stream()` on one `Device` leaks the first `CFString`.
+
 * `focus._TTY_CACHE` (`focus.py:119`) has an expiry per entry but no eviction.
   `clear_tty_cache()` exists and is called by tests only. In a daemon it
   accumulates one entry per distinct pid ever asked about.
@@ -610,6 +784,13 @@ cache exceeds a few hundred keys; release the previous `_mode` at the top of
 
 ### F17. Everything is wall-clock, and one thing should not be
 
+**PARTIAL.** `LightingOwner` was moved to a monotonic clock (its `clock`
+parameter now defaults to `time.monotonic`, `lighting_owner.py:461`). Still
+wall-clock, so still open: `ConfigWatcher` (`clock` defaults to `time.time`,
+`staleness.py:710`), `CodeWatcher` (`staleness.py:957`), and `run_with_reconnect`
+(`device/__init__.py:110-162`, all interval maths on `time.time()`). A backwards
+clock correction still stalls those three.
+
 `staleness.PROCESS_STARTED = time.time()` (`staleness.py:54`) and every
 comparison against a file mtime use wall time, which is correct because mtimes
 are wall time. But `LightingOwner`, `ConfigWatcher`, `CodeWatcher` and
@@ -624,6 +805,10 @@ affect this, but a laptop that wakes to a corrected clock can.
 `time.time()` only where an mtime is on the other side of the comparison.
 
 ### F18. The reconnect loop stops ticking for two seconds after a drop
+
+**OPEN.** Confirmed: after a stream ends, `run_with_reconnect` still does a bare
+`time.sleep(retry_interval)` (`device/__init__.py:162`) with no tick-while-waiting
+and no `[1, 2, 5, 10]` s backoff ladder.
 
 `run_with_reconnect` ticks while waiting for a *missing* pad
 (`device/__init__.py:120-130`) but does a bare `time.sleep(retry_interval)`
@@ -641,6 +826,12 @@ adopt the vendor's `[1, 2, 5, 10]` s ladder from `FACTORY-DEFAULTS.md` §9.
 ## Unhappy paths
 
 ### F10. A hook on an unwritable or full disk raises into Claude Code
+
+**OPEN.** Confirmed against the current `cmd_hook` (`cli.py:396-441`): it still
+guards only `json.load` (`cli.py:400-401`), and `_store(cfg)`, `store.update(...)`
+and `store.clear(...)` all run unguarded. `main()` is still
+`return args.func(args)` with no top-level handler (`cli.py:2311-2322`), so a
+write failure still reaches the hook's stderr on every event.
 
 `cmd_hook` guards exactly one failure, JSON parsing
 (`src/freemicro/cli.py:233-236`, *"Never break Claude Code because of a hook
@@ -670,6 +861,10 @@ surface. Optionally write the reason to `$FREEMICRO_HOOK_LOG` if that is set.
 
 ### F19. A corrupt `config.json` is silent, a corrupt `keymap.json` is fatal, and only one of those is right
 
+**OPEN.** Confirmed: `Config.load` still swallows a broken `config.json` and
+returns defaults with no error recorded on the object (`config.py:76-78`), and
+neither `doctor` nor `status` surfaces the parse failure.
+
 `Config.load` swallows a broken `config.json` and returns defaults
 (`src/freemicro/config.py:76-78`, *"A broken config should never stop the light
 from working"*). `padconfig.load` raises (`padconfig.py:545-562`, *"running on
@@ -684,6 +879,11 @@ error on the `Config` object and have `doctor` and `status` print it.
 
 ### F20. `freemicro run` and `keys` acquire the pad lock but ignore whether they got it
 
+**OPEN.** Confirmed: `cmd_keys` (`cli.py:1433`) and `cmd_run` (`cli.py:1814`)
+still call `lock.acquire()` without checking the result, relying on the earlier
+`_pad_is_taken` check a few lines up. (Other call sites, e.g. `cli.py:774`, do
+check.)
+
 `cmd_run` (`cli.py:1530-1535`) and `cmd_keys` (`cli.py:1176-1181`) call
 `lock.acquire()` without checking the return value. In practice `_pad_is_taken()`
 was checked a few lines earlier, so the window is small, but two `freemicro run`
@@ -697,8 +897,9 @@ The lock's whole purpose is to make that impossible.
 * **Two FreeMicro processes.** `PadLock` is an `flock`, so a killed holder
   releases it in the kernel; `reclaim_stale_lock` explains rather than instructs
   (`staleness.py:632-675`). Good.
-* **Pad yanked mid-write.** `_send` catches and latches; `_apply_exit_state`
-  catches and returns. The latch is F4, but nothing crashes.
+* **Pad yanked mid-write.** `_send` catches and retries on a backoff;
+  `_apply_exit_state` catches and returns. The old permanent latch was F4, now
+  fixed; nothing crashes.
 * **Session whose terminal died.** `plan_for_session` fails closed to "do
   nothing" and `tab_script` never launches an app (`focus.py:276-331`). Good,
   and the AppleScript injection surface is pattern-checked at two layers.
@@ -714,6 +915,16 @@ The lock's whole purpose is to make that impossible.
 ## Assertions that encode an assumption rather than a requirement
 
 ### F21. `test_ttl_expires_stale_sessions` now passes by accident
+
+**FIXED.**
+
+> **Resolved:** the fixture no longer reaches for the real machine. The store
+> fixture now injects a stubbed `terminal_probe` and a fake `liveness`
+> (`tests/test_state_engine.py:141-142`), the shared liveness cache is
+> monkeypatched (`:128`), and the TTL assertion was rewritten as
+> `test_ttl_expires_a_session_nothing_vouches_for` (`:180`), which tests the
+> liveness-aware behaviour rather than a fake-clock accident. No test in the file
+> shells out to real `ps` for this any more. The original description follows.
 
 `tests/test_state_engine.py:83-89` asserts that a record older than the TTL is
 deleted from disk. The `store` fixture (`tests/test_state_engine.py:44-49`) uses
@@ -741,6 +952,15 @@ swept".
 
 ### F22. `test_joystick_fires_once_per_flick` encodes the wrong "up"
 
+**FIXED.**
+
+> **Resolved:** with F5 fixed, the tests were corrected to the factory table.
+> `test_joystick_fires_once_per_flick` now expects `JOY_DOWN` at angle 0.25
+> (`tests/test_bridge.py:125-129`), and the direction test asserts the full
+> factory sector map including `(0.75, "JOY_UP")` with a comment citing
+> `FACTORY-DEFAULTS.md` §6 (`tests/test_bridge.py:133-142`, `178`). The original
+> description follows.
+
 `tests/test_bridge.py:105-111` asserts `tracker.update(0.25, 0.7) == "JOY_UP"`,
 twice. Angle 0.25 is *down* per `FACTORY-DEFAULTS.md` §6 and per
 `input/pointer.py`'s own orientation note. The test restates
@@ -754,6 +974,12 @@ the wheel arithmetic, not the orientation.
 `FACTORY-DEFAULTS.md` §6.
 
 ### F23. Tests that restate the implementation
+
+**PARTIAL.** The third bullet is resolved: the release-on-shutdown behaviour now
+exists (F1) and is covered - `release_all` / `release_held_keys` / `close()`
+appear in `tests/test_bridge.py` and `tests/test_actions.py`. The first two
+bullets (a `direction_for` test that restates list order, and the absence of a
+docs test that would have caught F8) are lower-value and unchanged.
 
 Lower value, listed for completeness:
 
@@ -771,6 +997,13 @@ Lower value, listed for completeness:
 ---
 
 ## Docs that claim what the code does not do
+
+**Mixed as of 2026-07-24.** The rows tied to F5, F7, F11 and F12 are now
+resolved (see those findings). Still true: the two mic-shortcut rows
+(`README.md:251`, `CUSTOMIZING.md`), the F9 rows about `status`, the F6 doctor
+row, and the F14 coexistence row. The `default_keymap.json` joystick-comment /
+`pointer.py` px/s rows are resolved by F7.
+
 
 | Doc | Claim | Reality |
 |---|---|---|
@@ -804,22 +1037,28 @@ Lower value, listed for completeness:
 
 ## Summary of recommended fixes, in order
 
-1. **F1** Track held chords in the bridge and release them on disconnect,
-   reload, exit and `atexit`. This is the only finding that can leave the user's
-   machine in a broken state.
-2. **F2, F3** Delete the two remaining hand-rolled `StateStore` constructions and
-   pass all three TTLs to `SlotResolver`. One store construction in the tree.
-3. **F4** Do not latch lighting off silently; say it once and clear the latch on
-   recovery.
-4. **F5** Make the discrete wheel agree with the factory sector table, and fix
-   the test that encodes the wrong one.
-5. **F6, F7** Surface pointer errors and print the vector in `--dry-run`; wire
-   `cli.py` to the pointer that landed under it.
-6. **F10** `try/except` around the whole of `cmd_hook`.
-7. **F8, F11, F12** Collapse the mic shortcut, the palette and the lighting
-   method to one copy each, and delete the contradicting prose.
-8. **F9** Wire `freemicro status` to `focus.current_slots()` and
-   `describe_claim()`, as `AGENT-KEYS.md` already specifies.
-9. **F15** Halve the per-tick file I/O and slow the polls; the pad's latency
-   budget is human-scale.
-10. **F21** Repair the TTL test so it tests the behaviour that exists.
+Status as of 2026-07-24. Done items are struck through in words rather than
+markup.
+
+1. **F1 - DONE.** Held chords are tracked in `quartz._held` and released on
+   disconnect, reload, exit, signal and `atexit`.
+2. **F2, F3 - DONE.** One store construction (`default_store`), and
+   `SlotResolver.for_store` reads the TTLs off the store.
+3. **F4 - DONE.** Lighting no longer latches off silently; it retries on a
+   backoff and says so once.
+4. **F5 - DONE.** The discrete wheel matches the factory sector table, and the
+   test was fixed (F22).
+5. **F6 - STILL OPEN (partial), F7 - DONE.** The vector now prints in
+   `--dry-run`; pointer errors are still unsurfaced because `Bridge` builds the
+   `Pointer` without an `on_error` and `update` restarts on error.
+6. **F10 - STILL OPEN.** `cmd_hook` still guards only the JSON parse; wrap the
+   whole body and add a top-level handler in `main()`.
+7. **F8 - partial, F11 - DONE, F12 - DONE.** Palette and lighting method are one
+   copy each and the PROTOCOL prose is fixed; the mic-shortcut docs
+   (`README.md`, `CUSTOMIZING.md`) still name the rejected combo.
+8. **F9 - STILL OPEN.** `freemicro status` still prints session UUIDs; wire it to
+   `focus.current_slots()` and `describe_claim()`.
+9. **F15 - STILL OPEN.** Per-tick file I/O and poll rate are unchanged.
+10. **F21 - DONE.** The TTL test now tests the liveness-aware behaviour.
+
+The current open set, ordered, is the "Still open" list at the top of this file.

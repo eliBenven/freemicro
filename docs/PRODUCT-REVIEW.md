@@ -5,6 +5,22 @@
 > `default_keymap.json` as if the pad had just come out of the box, then read
 > the code to check whether the docs were telling the truth.
 >
+> **Reconciled 2026-07-24 against the current code.** A lot of this landed. Each
+> numbered section now opens with a status tag - **DONE**, **OPEN** or
+> **PARTIAL** - and the DONE ones cite where. The prose is kept as the record of
+> what the product was; it just no longer asserts a gap that is closed.
+>
+> Short version of what changed since the review: the README now leads with the
+> one sentence (§1); the default keymap was rebuilt so no default types text and
+> the dial no longer submits an invalid command (§2); approve/reject now live on
+> the pad via `answer_permission`, closing the loop (§4); auto-dim exists (§5); a
+> real `freemicro uninstall` and a `SIGTERM`/`atexit` guard that blanks the pad
+> exist (§6); the screen, busylight, VIA and QMK renderers, the firmware
+> directory and the presets are deleted (§7, Cut this). Still open: no sound
+> (§9), `freemicro status` still cannot name a project (§4/§9), onboarding still
+> does not ask what the pad is for (§8), `lighting.enabled` still ships false
+> (§3), and the CLI still talks in internals (§10).
+>
 > This is not a bug hunt. Everything below can be true while every test passes.
 > The question here is whether this is the right product and whether it is good.
 >
@@ -24,14 +40,17 @@ that sentence or scope creep away from it.
 
 Here is how the four user-facing surfaces score against it:
 
+Reconciled statuses are in the right column; the original verdict is kept in the
+text so the change is visible.
+
 | Surface | Serves the sentence? |
 |---|---|
-| `README.md` headline | **No.** "Your OpenAI Codex Micro, driven by Claude Code. No ChatGPT desktop app." says what it replaces, not what it does for you. The word "project" appears nowhere in the README except in "open-source project" and "pyproject.toml". |
-| `README.md` subhead | **No.** Four claims in one sentence, and the best one is missing: "Six Agent Keys that light up with *your* agent's real state" is singular. The whole point is that it is *plural* and each key is a different repo. |
+| `README.md` headline | **Now Yes** (was No). The headline is now "Your **Codex Micro** shows which of your **Claude Code** projects needs you, and pressing a key takes you to it." (`README.md:5`), followed by "Six Agent Keys, six repos, one key each." |
+| `README.md` subhead | **Now Yes** (was No). The subhead is now plural and per-repo, with the factory palette shown inline. |
 | `freemicro run` (default behaviour) | **Yes.** Keys in, per-project lights out. This is the one thing that is right. |
 | Web UI front page | **Half.** The pad diagram is excellent and the "pad is the interface" decision was correct. But the page is about assigning bindings, not about which project is on which key. |
-| Shipped `default_keymap.json` | **Half.** `AG00`-`AG05` are `focus_session`, which is right. The seven action keys, the dial and the stick all serve a different product. |
-| `freemicro status` | **No.** Prints `working  27961705-b2ca-4c36-be4e-10f59b5a73b6 (0s ago)`. A session UUID. The one command whose job is "what is my pad showing" cannot name a single project. |
+| Shipped `default_keymap.json` | **Now better.** `AG00`-`AG05` are `focus_session`; the action keys were rebuilt so none types a prompt and the dial no longer submits an invalid command (see §2). |
+| `freemicro status` | **Still No.** Still prints `state / session_id / age` with a raw UUID (`cli.py:507-540`). The one command whose job is "what is my pad showing" still cannot name a single project. |
 
 The hedge that does the damage is this blockquote, third paragraph of the
 README:
@@ -46,9 +65,22 @@ command table, and the reason `firmware/qmk-keymap/` is in the repo. It is a
 second product, it has zero verified users, and it is stated before the reader
 has been told what the first product does. Cut it.
 
+> **Mostly DONE.** The four extra renderers are deleted (only `base.py` and
+> `micro_leds.py` remain), and `firmware/` and `presets/` are gone. What still
+> lingers: `freemicro watch` is still registered (`cli.py:2285`), and
+> `emit`/`render`/`renderers` still exist as commands (fine for development, but
+> still in the user-facing table). Confirm the positioning paragraph itself was
+> removed from the README.
+
 ---
 
 ## 1. The README sells a different product than the one that got built
+
+**PARTIAL.** The headline is fixed: the README now opens with the one sentence
+and "Six Agent Keys, six repos, one key each" (`README.md:5-9`), and the factory
+palette is shown inline. What may still be undersold: promoting
+`freemicro config --web` and `freemicro menubar` into the quickstart, and a
+"what it looks like in a day" section. Verify those against the current README.
 
 **Confidence: very high.** This is the highest-impact finding in the document.
 
@@ -90,6 +122,19 @@ material is excellent and belongs in `PROTOCOL.md`, where it already is.
 ---
 
 ## 2. The shipped defaults are one person's preferences, and two of them do not work
+
+**DONE.** The default keymap was rebuilt along the lines this section
+recommends. In the current `default_keymap.json`: `ACT06` is `key shift-tab`
+("FAST - cycle permission mode"); `ACT07` is `answer_permission approve` and
+`ACT08` is `answer_permission reject` (the closed loop, §4); `ACT09` is `cmd+t`;
+`ACT10` and `ACT11` are `none` (MIC, "pick your dictation app"); `ACT12` is
+`return`; `ENC_CW`/`ENC_CC` are `up`/`down`, not `/effort up`; and the stick is
+`mouse` in pointer mode. So 2a (`/effort up`), 2b (Wispr assumed), 2c
+(Chrome/Terminal hardcoded) and 2e (defaults type text) are all resolved. The
+two supporting fixes this section asked for also landed: `page-up`/`page-down`/
+`forward-delete` now parse (`input/keys.py:54-60`, `116-130`), and
+`auto_dim_seconds` is honoured (§5). The keycap `_readme` contradiction (2d) is
+not fully addressed: `default_keymap.json` still carries a 43-line `_readme`.
 
 **Confidence: very high on the facts, high on the recommendation.**
 
@@ -302,6 +347,13 @@ digit selection, which I believe but did not put a physical prompt in front of.
 
 ## 3. The default install produces a pad that does nothing you can see
 
+**PARTIAL.** The dead-end is softened: `_show_next_steps()` now tells the user
+about `freemicro lights --enable` (`onboarding.py:312`, `315`), so the guided
+path no longer ends silently. But the core recommendation is not taken:
+`lighting.enabled` still ships `false` in `default_keymap.json:270`, rather than
+defaulting to whether the ChatGPT desktop app is running at first-run time. The
+machinery to make that call (`vendor_app_running()`, `--coexist`) exists.
+
 **Confidence: high.**
 
 `lighting.enabled` is `false` in the shipped config. `freemicro start` asks
@@ -343,6 +395,20 @@ whose headline feature is off after a guided setup that never showed it to you.
 ---
 
 ## 4. The loop is not closed: the pad tells you it needs you, and cannot answer
+
+**DONE (the core), one piece still open.** The headline recommendation shipped:
+approve and reject now live on the pad. There is an `answer_permission` action
+kind (`input/actions.py:636`, `697`) backed by a `permission_prompt` module
+(`permission_prompt.py`: `pending`, `plan`, `perform`, `already_answered`), and
+the shipped default binds `ACT07` to `answer_permission approve` and `ACT08` to
+`answer_permission reject`. The action is inherently state-gated - it only acts
+on a live permission prompt - which is what the `when` recommendation was for.
+"The key that is glowing amber is the key that approves it" is now real.
+
+Still open from this section: `idle_prompt` handling, and distinguishing
+"waiting on permission" from "waiting on you to type" on the pad. And the
+smaller sibling below (`freemicro status` naming the project) is still open - see
+§9.
 
 **Confidence: very high. This is what makes someone abandon it in week two.**
 
@@ -391,6 +457,12 @@ Two smaller things in the same family:
 
 ## 5. There is no auto-dim, and the pad is a desk object
 
+**DONE (auto-dim), low-battery still open.** Auto-dim exists:
+`LightingConfig.auto_dim_seconds` defaults to 180 (`padconfig.py:487`), with
+`auto_dim_alerts` (`:497`) and an `auto_dim_enabled` gate (`:513-514`), a parser
+(`_parse_auto_dim`, `:986`), and it is surfaced by the CLI (`cli.py:970-978`).
+The low-battery cue this section also asked for is not implemented.
+
 **Confidence: high.**
 
 `grep -rni "auto_dim\|auto-dim" src/` returns exactly one hit, and it is a
@@ -430,6 +502,16 @@ per `FACTORY-DEFAULTS` §10a, but it should exist.
 ---
 
 ## 6. Nothing can remove FreeMicro, and stopping it can leave your pad stuck lit
+
+**DONE on both halves.** There is now a real `freemicro uninstall` command
+backed by `uninstall.py` (with `PROCESS`, `LEDS`, `LAUNCHAGENT`, `HOOKS`,
+`CONFIG`, `STATE` targets; `cli.py:118`, `162-170`), which blanks the pad and
+names what it cannot remove. And the `SIGTERM`-leaves-the-pad-lit half is fixed:
+`renderers/micro_leds.py` installs a signal guard chaining `SIGINT`/`SIGTERM`/
+`SIGHUP` plus `atexit` to `release_lighting()`, which hands the pad back before
+the process dies (`micro_leds.py:238-310`). The `hook-events.jsonl` size cap
+this section asked for also landed (`cli._log_raw_event` / `_rotate_hook_log`,
+`cli.py:344-381`).
 
 **Confidence: very high on both halves.**
 
@@ -511,6 +593,13 @@ directory is a debugging tool that outstayed its debugging session.
 ---
 
 ## 7. The screen renderer's window cannot open on any machine, and the README claims it can
+
+**DONE.** `renderers/screen.py` is deleted, and with it `tk_is_safe`,
+`tk_unsafe_reason`, the probe and its cache, and the `--no-screen` machinery. The
+renderers directory now holds only `base.py` and `micro_leds.py`. The one thing
+worth keeping was kept: `freemicro run` still prints `state:` when the state
+changes (`_print_state`, `cli.py`). `busylight`, `micro_via` and `micro_qmk` are
+gone too (see Cut this).
 
 **Confidence: very high. This is the clearest delete in the repo.**
 
@@ -606,6 +695,15 @@ deleting busylight.
 
 ## 8. Onboarding installs things without asking what the user wants
 
+**OPEN (one small part done).** `freemicro start` still runs its fixed step
+sequence (`step_intro`, `step_permissions`, `step_device`, `step_contention`,
+`step_lights`, `step_hooks`, `step_daemon`) and never asks "what do you want the
+pad for", nor which dictation app or terminal (no `TERM_PROGRAM` prompt in
+`onboarding.py`). The one part that did land: `_show_next_steps()` now points at
+`freemicro lights --enable` (`onboarding.py:312-315`). The lights/keys/both
+branching, the dictation question, and dropping the intro paragraph and the
+60-second device wait are all still open.
+
 **Confidence: high.**
 
 `freemicro start` runs eight steps. It asks four yes/no questions: open a
@@ -656,6 +754,13 @@ most useful things a new user could do next.
 
 ## 9. What is missing that a user would expect
 
+**PARTIAL.** Three rows below are now delivered: answering a permission prompt
+from the pad (§4), auto-dim (§5) and a complete uninstall (§6). Still missing:
+**sound** (confirmed - `grep -riE "afplay|NSSound|beep" src/freemicro` returns
+nothing), `freemicro status` naming projects (§9/§4, still a UUID), a low-battery
+warning, telling the user when it has stopped working, `freemicro pause` in the
+CLI, and a "what happened while I was away" answer.
+
 Ranked by how surprising the absence is.
 
 | Missing | Why the absence is surprising | Confidence |
@@ -673,6 +778,14 @@ Ranked by how surprising the absence is.
 ---
 
 ## 10. What is actively annoying
+
+**MOSTLY OPEN, one fixed.** The "error message recommends key names the parser
+rejects" item is resolved: `page-up`, `page-down` and `forward-delete` now parse
+(`input/keys.py:54-60`, `116-130`). Everything else here is unchanged as of
+2026-07-24: `keys --list` still prints the full internals reference, the CLI
+vocabulary is still the implementation's, failures still lecture, `status` still
+leads with the staleness warnings, and the `default_keymap.json` `_readme` is
+still 43 lines.
 
 Ordered by how often a user hits it.
 
@@ -740,6 +853,14 @@ in the right order.
 
 ## 11. What would make someone abandon it in week two
 
+**Two of the six are addressed.** #1 (the loop is not closed) is closed by
+`answer_permission` (§4), and #4 (the keys type things they did not ask for) is
+fixed by the rebuilt default keymap (§2). Still live: #2 (goes quiet without
+saying so - the menu bar exists but is undiscoverable), #3 (six white LEDs all
+night - now mitigated by auto-dim, §5, but no brightness schedule or quiet
+hours), #5 (no guard for changed hook payload *fields*, only missing events),
+and #6 (the macro-pad user still has to rebuild the map by hand).
+
 Unsentimentally, in order of likelihood:
 
 1. **The loop is not closed.** Amber tells you, and you still reach for the
@@ -773,6 +894,17 @@ Unsentimentally, in order of likelihood:
 
 ## Cut this
 
+**Mostly DONE.** The file deletions all happened: `renderers/screen.py` and its
+support, `renderers/busylight.py`, `renderers/micro_via.py`,
+`renderers/micro_qmk.py`, the `firmware/` directory and the `presets/` directory
+(both `claude-code.keyboard.json` and `claude-code.input.json`) are gone. Still
+not done: `freemicro watch` is still a registered command (`cli.py:2285`);
+`emit`/`render`/`renderers` remain (kept intentionally, but still in the
+user-facing table); the `_readme` block in `default_keymap.json` is still 43
+lines rather than ~5; the action-kind reference is still in `keys --list`; and
+`step_intro()` / the `step_device` wait are still in onboarding. The rows below
+are the original argument.
+
 Deletions, ordered by value returned per line removed.
 
 | Cut | Lines | Why |
@@ -798,21 +930,21 @@ that stops claiming reliability for code nobody has executed.
 
 ## Summary
 
-| # | Finding | Confidence |
+| # | Finding | Status (2026-07-24) |
 |---|---|---|
-| 1 | The README sells a different product than the one that got built. Per-project Agent Keys, the web UI and the menu bar are all invisible from the front door | very high |
-| 2 | The shipped defaults are one person's prompts, and the dial binding submits an invalid command on every detent | very high |
-| 3 | `lighting.enabled` defaults to false, so the sanctioned setup path ends with a pad whose lights do not work | high |
-| 4 | The loop is not closed: amber tells you, and nothing on the pad can answer it. This is the week-two abandonment | very high |
-| 5 | Auto-dim is documented as Confirmed factory behaviour, recommended in the project's own config, and not implemented | high |
-| 6 | There is no uninstall, and `SIGTERM` leaves the pad lit with nothing driving it | very high |
-| 7 | The screen renderer's window cannot open on any machine, and the README calls it Guaranteed | very high |
-| 8 | Onboarding never asks what the user wants the pad for | high |
-| 9 | No sound, on an ambient-awareness product | very high |
-| 10 | The CLI talks in zones, methods, action kinds and priorities, and lectures on every failure | high |
+| 1 | The README sells a different product than the one that got built | PARTIAL - headline rewritten; web UI / menu bar promotion to verify |
+| 2 | The shipped defaults are one person's prompts, and the dial binding submits an invalid command on every detent | DONE - keymap rebuilt; `_readme` still long |
+| 3 | `lighting.enabled` defaults to false, so the sanctioned setup path ends with a pad whose lights do not work | PARTIAL - next-steps now names `lights --enable`; default still false |
+| 4 | The loop is not closed: amber tells you, and nothing on the pad can answer it | DONE - `answer_permission` on ACT07/ACT08; `status` naming still open |
+| 5 | Auto-dim documented as Confirmed factory behaviour and not implemented | DONE - `auto_dim_seconds` implemented; low-battery still open |
+| 6 | There is no uninstall, and `SIGTERM` leaves the pad lit with nothing driving it | DONE - `freemicro uninstall` + signal/atexit guard |
+| 7 | The screen renderer's window cannot open on any machine, and the README calls it Guaranteed | DONE - deleted |
+| 8 | Onboarding never asks what the user wants the pad for | OPEN |
+| 9 | No sound, on an ambient-awareness product | OPEN |
+| 10 | The CLI talks in zones, methods, action kinds and priorities, and lectures on every failure | OPEN (page-name parse error fixed) |
 
-The single highest-leverage change is **§4 plus §2 together**: ship `when` on
-bindings, put approve on `APPR` and reject on `REJ`, and lead the README with
-"the key that is glowing amber is the key that approves it". That is one small
-feature, one config file, and one paragraph, and it converts this from a very
-good status light into the thing it is actually for.
+The single highest-leverage change this review named - **§4 plus §2 together** -
+has landed: approve/reject live on the pad via `answer_permission`, the default
+keymap was rebuilt, and the README leads with the product. What remains most
+worth doing next, from the open set: sound (§9), `freemicro status` naming the
+project on each key (§4/§9), and asking the user what the pad is for (§8).
