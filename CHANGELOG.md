@@ -4,6 +4,33 @@ All notable changes to FreeMicro are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-07-24
+
+Fixes from the first day of real use.
+
+### Fixed
+- **Stuck modifier after push-to-talk.** A modifier key-up was posted with the
+  event's default flags (which for a modifier keycode include its own flag), so
+  macOS believed e.g. control was still held after the mic released. Enter then
+  became ctrl+Return and clicks became right-clicks. `key_event` now always sets
+  the flags it is given, and a chord releases with decreasing flags. Two
+  backstops added for a genuinely dropped pad event: a repeated key-down
+  releases the stale hold first, and a hold held past 120s auto-releases.
+- **A long `submit` prompt dropped a newline instead of sending.** The text is
+  typed as one fast Unicode burst that a TUI reads as a paste; a Return arriving
+  inside it became a literal newline. Typed text now settles before the Return.
+  A per-binding `submit_delay` tunes it.
+
+### Added
+- **`double_tap` on a `hold` binding** fires a second, different shortcut on a
+  double-tap while keeping the physical push-to-talk hold, so the mic key can
+  drive a hold-mode app on hold and a toggle-mode app on double-tap.
+
+### Changed
+- The shipped default's REJ cap is now a plain **Escape** (interrupt Claude,
+  clear the input, decline a prompt) rather than the gated `answer_permission
+  reject`. Approve stays session-targeted.
+
 ## [0.1.0] - 2026-07-24
 
 First public release.
@@ -259,4 +286,5 @@ The layers that predate the hardware work, and are still the backbone:
 - **There is no preset trust check yet.** A config you did not write is a
   program you did not read - see `docs/SECURITY-MODEL.md`.
 
+[0.1.1]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.1
 [0.1.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.0
