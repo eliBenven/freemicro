@@ -1,0 +1,330 @@
+{
+  "version": 1,
+  "_readme": [
+    "FreeMicro pad configuration: what every input does, plus LED colours.",
+    "Edit it in a browser with `freemicro config --web`, or by hand after",
+    "`freemicro keys --init`. Either way it is reloaded while `freemicro run`",
+    "is running. `freemicro keys --dry-run` prints the id of whatever you press.",
+    "Input ids: AG00-AG05 (Agent Keys), ACT06-ACT12 (action keys), ENC_CLK /",
+    "ENC_CW / ENC_CC (dial), JOY_UP/DOWN/LEFT/RIGHT (thumbstick flicks).",
+    "The bindings below match the SIX KEYCAPS THE PAD SHIPS WITH - FAST, APPR,",
+    "REJ, SPLIT, MIC, CODEX - so every key does what the cap in your hand says.",
+    "Swapped a cap? Change \"keycaps\" below and the web UI redraws the pad.",
+    "Nothing here types words into your agent, and nothing assumes an app you",
+    "may not own.",
+    "",
+    "CHORDS. A binding key with a + in it binds the two keys pressed TOGETHER,",
+    "e.g. \"ACT07+ACT08\". Order does not matter. Two keys only; not the dial",
+    "detents or the joystick, which have no release. A key that is in a chord",
+    "AND bound on its own waits 45ms (\"chords\": {\"settle_ms\": 45}) to see if a",
+    "partner is coming; give one key {\"action\": \"none\"} and the chord costs",
+    "nothing at all. Nothing below is chorded, so nothing below waits.",
+    "",
+    "While a 'hold' key is down - dictation, once you bind one on MIC - other",
+    "keys STOP TYPING. It is holding real modifier keys, so anything they",
+    "typed would come out as a shortcut instead. The skipped press is printed.",
+    "Focus, mouse and shell keys still work, because modifiers cannot change",
+    "what those mean.",
+    "",
+    "Full reference: docs/CUSTOMIZING.md"
+  ],
+  "keycaps": {
+    "ACT06": "FAST",
+    "ACT07": "APPR",
+    "ACT08": "REJ",
+    "ACT09": "SPLIT",
+    "ACT10": "MIC",
+    "ACT12": "CODEX"
+  },
+  "bindings": {
+    "AG00": {
+      "action": "focus_session",
+      "label": "agent 1",
+      "comment": [
+        "Agent Keys 1-6: one project each. The key's colour is that project's",
+        "state (blue thinking, amber waiting on you, green just finished, red",
+        "error, dark = nothing there), and pressing it brings that project's",
+        "terminal tab to the front. Which project sits on which key is the",
+        "'agent_keys' section at the bottom of this file.",
+        "It focuses a window - it does NOT type into the current one. Nothing",
+        "happens if the project is not running, or if its terminal cannot be",
+        "identified; `freemicro keys --dry-run` prints exactly which it is.",
+        "Want one key nailed to one repo forever, whatever the policy says?",
+        "{\"action\": \"focus_session\", \"project\": \"~/code/api\"}."
+      ]
+    },
+    "AG01": {
+      "action": "focus_session",
+      "label": "agent 2"
+    },
+    "AG02": {
+      "action": "focus_session",
+      "label": "agent 3"
+    },
+    "AG03": {
+      "action": "focus_session",
+      "label": "agent 4"
+    },
+    "AG04": {
+      "action": "focus_session",
+      "label": "agent 5"
+    },
+    "AG05": {
+      "action": "focus_session",
+      "label": "agent 6"
+    },
+    "ACT06": {
+      "action": "key",
+      "key": "shift-tab",
+      "label": "FAST - cycle permission mode",
+      "comment": [
+        "The FAST cap's factory command is composer.toggleFastMode. Claude",
+        "Code's equivalent of 'stop stopping and go' is Shift+Tab, which cycles",
+        "normal -> auto-accept edits -> plan mode. It goes to the window you",
+        "are looking at, like every plain 'key' binding."
+      ]
+    },
+    "ACT07": {
+      "action": "answer_permission",
+      "answer": "approve",
+      "long_press": "always",
+      "label": "APPR - approve (hold for always)",
+      "comment": [
+        "THE AMBER KEY IS THE KEY THAT ANSWERS IT. When a project goes amber",
+        "it is blocked on a permission prompt; this key answers that prompt in",
+        "THAT project - it raises that terminal tab first and sends the answer",
+        "there, so it never types into whatever window you happen to be in.",
+        "Tap = Yes, once. HOLD for half a second = 'Yes, and don't ask again',",
+        "which is the prompt's second option when it offers one. Nothing at",
+        "all happens when no project is waiting: this key cannot send a",
+        "keystroke on spec. `freemicro keys --list` says what it would do now.",
+        "Two projects waiting? It answers the one that asked most recently and",
+        "says so. Add \"project\": \"~/code/api\" to nail it to one repo.",
+        "Prefer two keys to a hold? Drop \"long_press\" and add a chord:",
+        "\"ACT07+ACT08\": {\"action\": \"answer_permission\", \"answer\": \"always\"}."
+      ]
+    },
+    "ACT08": {
+      "action": "answer_permission",
+      "answer": "reject",
+      "label": "REJ - decline",
+      "comment": [
+        "The other half of ACT07, and the REJ cap's factory command",
+        "(approval.decline). Sends Escape into the asking session's tab, which",
+        "is how that prompt is declined. Same rule: no prompt, no keystroke."
+      ]
+    },
+    "ACT09": {
+      "action": "key",
+      "key": "cmd+t",
+      "label": "SPLIT - new tab in this project",
+      "comment": [
+        "The SPLIT cap forks the thread on a stock pad. A new terminal tab",
+        "inherits the current one's directory, so this is 'start a second",
+        "agent on the same repo' - which is what the Agent Keys are for."
+      ]
+    },
+    "ACT10": {
+      "action": "none",
+      "label": "MIC - pick your dictation app",
+      "comment": [
+        "Unbound on purpose. Dictation shortcuts belong to an app you may not",
+        "have: `freemicro start` asks which one you use and writes the right",
+        "combo, and the web UI offers the same choices. A guessed shortcut for",
+        "an app you do not own is a key that silently does nothing.",
+        "Push-to-talk, once you have picked one, looks like:",
+        "{\"action\": \"hold\", \"key\": \"ctrl+cmd+o\"} - and set the SAME combo",
+        "in the dictation app as hold-to-talk, not toggle."
+      ]
+    },
+    "ACT11": {
+      "action": "none",
+      "label": "MIC (second half - intentionally ignored)",
+      "comment": "The wide MIC cap spans two switches and the pad reports both. Binding both fires the key twice."
+    },
+    "ACT12": {
+      "action": "key",
+      "key": "return",
+      "label": "CODEX - send",
+      "comment": "The CODEX cap's factory command is composer.submit. Send."
+    },
+    "ENC_CLK": {
+      "action": "mouse",
+      "click": "left",
+      "label": "dial press - click",
+      "comment": "Clicks wherever the pointer is - pairs with the thumbstick, which moves it."
+    },
+    "ENC_CW": {
+      "action": "key",
+      "key": "up",
+      "label": "dial cw, up / previous",
+      "comment": [
+        "Factory parity: clockwise is 'previous control or option', i.e.",
+        "ArrowUp (docs/FACTORY-DEFAULTS.md 5). Arrows move the selection in",
+        "any Claude Code picker - including a permission prompt - and walk",
+        "prompt history otherwise, so one detent is always exactly one step",
+        "and nothing can be submitted by accident."
+      ]
+    },
+    "ENC_CC": {
+      "action": "key",
+      "key": "down",
+      "label": "dial ccw, down / next"
+    },
+    "JOY_UP": {
+      "action": "mouse",
+      "y": -40,
+      "label": "pointer up"
+    },
+    "JOY_DOWN": {
+      "action": "mouse",
+      "y": 40,
+      "label": "pointer down"
+    },
+    "JOY_LEFT": {
+      "action": "mouse",
+      "x": -40,
+      "label": "pointer left"
+    },
+    "JOY_RIGHT": {
+      "action": "mouse",
+      "x": 40,
+      "label": "pointer right"
+    }
+  },
+  "joystick": {
+    "mode": "pointer",
+    "pointer_deadzone": 0.1,
+    "max_speed": 1200,
+    "gamma": 2.0,
+    "tick_hz": 90,
+    "precision_key": "",
+    "precision_scale": 0.25,
+    "invert_y": false,
+    "deadzone": 0.6,
+    "origin": 0.0,
+    "directions": [
+      "JOY_RIGHT",
+      "JOY_DOWN",
+      "JOY_LEFT",
+      "JOY_UP"
+    ],
+    "_comment": [
+      "The pad reports the stick as an angle (0..1 of a full turn) and a",
+      "distance (0..1), returning to exactly {a:0,d:0} when you let go.",
+      "",
+      "mode 'pointer' (default) makes it an analogue cursor, like the red",
+      "TrackPoint nub on a ThinkPad: how far you push sets the cursor's SPEED,",
+      "not how far it jumps, and it keeps moving while you hold it. The four",
+      "JOY_* bindings below do not fire in this mode - they are kept so that",
+      "switching to 'directions' still does something sensible.",
+      "",
+      "mode 'directions' is the older behaviour: one discrete flick per push,",
+      "fired when distance crosses 'deadzone' and re-armed when it falls back.",
+      "'directions' lists the four input ids starting at angle 0 and stepping",
+      "by a quarter turn in increasing-angle order - so right, down, left, up,",
+      "which is the order the hardware itself uses (angle 0.75 is UP; macOS",
+      "screen y grows downward). 'origin' rotates the whole wheel if your",
+      "stick's zero is somewhere else.",
+      "",
+      "Two deadzones, on purpose. 'deadzone' (0.6) guards an ACTION and is",
+      "large because crossing it types into your terminal.",
+      "'pointer_deadzone' (0.1) only rejects the stick's own slop, and every",
+      "bit of travel above it is precision you can feel. Do not raise it to",
+      "0.6: that is how pointing ends up feeling dead.",
+      "",
+      "Tuning: max_speed is pixels per second at FULL deflection - lower it if",
+      "the cursor overshoots. gamma shapes the middle of the range: 1 is",
+      "linear and twitchy, 2 is TrackPoint-like, 3 is very gentle near centre.",
+      "tick_hz is how often the cursor moves, not how often the pad reports.",
+      "Set precision_key to a spare input id (e.g. 'ACT12') and hold it to",
+      "drop to precision_scale of full speed for pixel work.",
+      "invert_y flips up/down if pointing comes out upside down on your unit.",
+      "Run `freemicro keys --dry-run` and watch the live angle, distance and",
+      "px/s while you push the stick - that is how these numbers get chosen."
+    ]
+  },
+  "lighting": {
+    "enabled": false,
+    "method": "rgbcfg",
+    "zones": [
+      "agent_keys"
+    ],
+    "on_exit": "off",
+    "_comment": [
+      "enabled=false by default: opt in with `freemicro lights --enable`.",
+      "Colours are the exact factory integers from docs/FACTORY-DEFAULTS.md.",
+      "Note 'done' is the factory's UNREAD colour - it is meant to clear once",
+      "you look at the session, which state.done_ttl_seconds in config.json",
+      "does for you (default 180s). Leave it green forever and the pad stops",
+      "matching factory behaviour within minutes.",
+      "on_exit=off blanks the pad when FreeMicro stops, handing the device",
+      "back cleanly - the same thing the vendor app does on quit.",
+      "method: 'rgbcfg' uses v.oai.rgbcfg for the underglow and backlight",
+      "verified on hardware and what the vendor app uses. 'preview' uses",
+      "lights.preview, which firmware v0.4.1 accepts and ignores: it lights",
+      "nothing. Only switch to it if you are debugging the protocol."
+    ],
+    "states": {
+      "idle": {
+        "color": "#FFFFFF",
+        "effect": "solid",
+        "brightness": 1.0,
+        "speed": 0.0
+      },
+      "working": {
+        "color": "#304FFE",
+        "effect": "solid",
+        "brightness": 1.0,
+        "speed": 0.0
+      },
+      "waiting": {
+        "color": "#FF6D00",
+        "effect": "solid",
+        "brightness": 1.0,
+        "speed": 0.0
+      },
+      "done": {
+        "color": "#00FF4C",
+        "effect": "solid",
+        "brightness": 1.0,
+        "speed": 0.0
+      },
+      "error": {
+        "color": "#FF0033",
+        "effect": "solid",
+        "brightness": 1.0,
+        "speed": 0.0
+      }
+    }
+  },
+  "agent_keys": {
+    "policy": "recent",
+    "slots": [
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ],
+    "_comment": [
+      "Which project each of the six Agent Keys follows. A key stands for a",
+      "PROJECT DIRECTORY, not a session id: terminal tabs come and go, but the",
+      "repo you are working in does not, so your pad never needs re-teaching.",
+      "policy:",
+      "  recent  (default) the six most recently active projects fill the keys",
+      "          automatically, newest first. Nothing to configure.",
+      "  pinned  slots you name below keep their key; the rest fill from",
+      "          'recent'. A pinned key is never lent to another project.",
+      "  manual  exactly the slots you name. Unnamed keys stay dark.",
+      "  mirror  the old behaviour - all six keys show the one winning state.",
+      "slots: six entries in AG00..AG05 order, each a directory or \"\", e.g.",
+      "  [\"~/code/api\", \"~/code/web\", \"\", \"\", \"\", \"\"]",
+      "Slots are STICKY: once a project holds a key it keeps it for as long as",
+      "it is live, however the activity order moves around it. Only a key that",
+      "has been vacated is refilled - so a glance always means the same thing.",
+      "`freemicro status` prints the current assignment."
+    ]
+  }
+}

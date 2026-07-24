@@ -1,24 +1,19 @@
-"""Input layer helpers (host-side).
+"""Input layer: pad events in, user-configured actions out.
 
-The physical inputs on the Codex Micro are standard USB HID and already type
-into your terminal — no middleware needed. This package only carries the
-*recommended layout* metadata (loaded from ``presets/``) so tooling and docs
-can describe the Claude Code layout in one place. The actual key remapping is
-done in Work Louder Input or VIA using the exported preset files.
+The Codex Micro's keys do **not** emit ordinary scancodes - they are vendor
+JSON-RPC notifications on the pad's ``0xFF00`` collection - so this package is
+what makes the pad do anything at all. Three pieces, kept separate so each is
+testable on its own:
+
+* :mod:`freemicro.input.keys` - key *names* to macOS keystrokes (pure).
+* :mod:`freemicro.input.actions` - the extensible action registry and the
+  backends that deliver them.
+* :mod:`freemicro.input.bridge` - routing device events to bound actions.
+
+The bindings themselves live in :mod:`freemicro.padconfig`, because the same
+user-owned file also carries the LED colours the renderers read.
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-_PRESETS_DIR = Path(__file__).resolve().parents[3] / "presets"
-
-
-def load_preset(name: str = "claude-code.input.json") -> dict:
-    """Load a layout preset from the repo's ``presets/`` directory."""
-    path = _PRESETS_DIR / name
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-__all__ = ["load_preset"]
+__all__: list = []
