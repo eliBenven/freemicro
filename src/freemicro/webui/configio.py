@@ -73,6 +73,12 @@ _NUMBER_FIELDS = frozenset({"x", "y", "count"})
 #: Lighting fields that must end up as JSON numbers.
 _LIGHT_NUMBER_FIELDS = ("brightness", "speed", "magic")
 
+#: The same, for a binding's own ``light``. One extra field, and it matters:
+#: ``timeout_seconds`` arriving as the string ``"120"`` would fail the range
+#: check in the config layer, which is the right place to fail but the wrong
+#: message to show somebody who typed a perfectly good number into a form.
+_ACTIVITY_LIGHT_NUMBER_FIELDS = ("brightness", "speed", "magic", "timeout_seconds")
+
 
 # ---------------------------------------------------------------------------
 # Locating
@@ -307,6 +313,11 @@ def normalise(document: Mapping[str, Any]) -> Dict[str, Any]:
                     binding[field] = _as_bool(binding[field])
                 elif field in _NUMBER_FIELDS:
                     binding[field] = _as_number(binding[field])
+            light = binding.get("light")
+            if isinstance(light, dict):
+                for field in _ACTIVITY_LIGHT_NUMBER_FIELDS:
+                    if field in light and light[field] is not None:
+                        light[field] = _as_number(light[field])
 
     lighting = data.get("lighting")
     if isinstance(lighting, dict):
@@ -350,6 +361,19 @@ def describe(pad: PadConfig) -> Dict[str, Any]:
             "kind": action.kind,
             "summary": action.describe(),
             "comment": action.comment,
+            # What the pad shows while this key is held, resolved the same way
+            # the renderer resolves it, so the browser draws what will happen
+            # rather than what the document happens to spell.
+            "light": None if action.light is None else {
+                "hex": color_to_hex(action.light.color),
+                "effect": action.light.effect,
+                "effect_name": effect_name(action.light.effect),
+                "brightness": action.light.brightness,
+                "speed": action.light.speed,
+                "zones": list(action.light.zones),
+                "timeout_seconds": action.light.timeout_seconds,
+                "summary": action.light.describe(),
+            },
         }
     states: Dict[str, Any] = {}
     for state in AgentState:

@@ -26,6 +26,23 @@
     "Focus, mouse and shell keys still work, because modifiers cannot change",
     "what those mean.",
     "",
+    "LIGHT WHILE HELD. Any binding may carry a \"light\", and the pad shows it",
+    "for as long as that key is DOWN - which is what makes the mic key glow",
+    "while you dictate. It is a layer over the agent-state colours, not a",
+    "replacement: the zones it does not name keep showing your projects, and",
+    "letting go shows the state as it is THEN, not as it was when you pressed.",
+    "  \"ACT10\": {\"action\": \"hold\", \"key\": \"ctrl+cmd+o\",",
+    "             \"light\": {\"color\": \"#2E8B57\", \"effect\": \"snake\",",
+    "                       \"speed\": 0.4, \"zones\": [\"underglow\"]}}",
+    "#2E8B57 snake on the underglow is what the pad you bought already does",
+    "while it is listening (docs/FACTORY-DEFAULTS.md 1b). Not red: red is",
+    "'error', and one colour cannot mean two things. Underglow, not the Agent",
+    "Keys, because those are carrying six projects you still want to see.",
+    "timeout_seconds (default 120, max 600, no 'never') takes the light down",
+    "from the clock if the key-up is ever lost - a Bluetooth drop mid-hold.",
+    "A TOGGLE cannot be lit honestly: FreeMicro sees the tap that starts",
+    "dictation and never learns that it stopped, so use 'hold'.",
+    "",
     "Full reference: docs/CUSTOMIZING.md"
   ],
   "keycaps": {
@@ -134,7 +151,12 @@
         "an app you do not own is a key that silently does nothing.",
         "Push-to-talk, once you have picked one, looks like:",
         "{\"action\": \"hold\", \"key\": \"ctrl+cmd+o\"} - and set the SAME combo",
-        "in the dictation app as hold-to-talk, not toggle."
+        "in the dictation app as hold-to-talk, not toggle.",
+        "Add \"light\" to it and the pad glows while you hold the key:",
+        "\"light\": {\"color\": \"#2E8B57\", \"effect\": \"snake\", \"speed\": 0.4}",
+        "which is the vendor's own recording colour, on the underglow, so the",
+        "six Agent Keys go on showing your projects while you talk. `freemicro",
+        "start` and the web UI write both halves for you."
       ]
     },
     "ACT11": {

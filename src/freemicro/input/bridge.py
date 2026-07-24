@@ -32,6 +32,15 @@ down is silently modified into something else. See :data:`MODIFIER_SAFE_KINDS`.
 
 **Two keys pressed together can be one binding.** See :meth:`Bridge.press` for
 the resolution rule and what it costs.
+
+Saying when a binding is live
+-----------------------------
+A binding can carry a ``light`` - what the pad should show for as long as that
+binding is doing its thing. This module is the only place that knows when that
+starts and stops, so it reports it, through ``on_activity``, and knows nothing
+else about lighting: it hands over the config's own object and lets whoever is
+driving the LEDs decide. See :meth:`Bridge._light` for why "live" here means
+*the key is down* and nothing more ambitious.
 """
 
 from __future__ import annotations
@@ -343,9 +352,16 @@ class Bridge:
         sleep: Optional[Callable[[float], None]] = None,
         autostart: bool = True,
         on_dispatch: Optional[Callable[[Dispatch], None]] = None,
+        on_activity: Optional[Callable[[str, Optional[Any]], None]] = None,
     ) -> None:
         self.backend = backend
         self.clock = clock or _monotonic
+        #: Called with ``(input_id, light)`` when a binding that carries a
+        #: ``light`` goes live, and with ``(input_id, None)`` when it stops.
+        #: ``light`` is the config's
+        #: :class:`freemicro.padconfig.ActivityLight`, passed through
+        #: untouched - this module deliberately knows nothing about colours.
+        self.on_activity = on_activity
         #: Called with any dispatch produced off the event path - i.e. a
         #: deferred press whose settle window ran out while nothing else was
         #: happening. Unset, those dispatches are queued and returned by the
@@ -358,6 +374,8 @@ class Bridge:
         self._deliver = threading.Lock()
         #: input id -> the ``hold`` action currently physically down.
         self._holding: Dict[str, Action] = {}
+        #: input ids whose ``light`` we have declared live and not yet retired.
+        self._lit: Dict[str, bool] = {}
         #: Presses we refused; their releases must be refused to match.
         self._suppressed: Dict[str, bool] = {}
         #: Chord-capable keys that are down and undecided.
@@ -441,7 +459,12 @@ class Bridge:
         They have to move together: a stale entry here would keep suppressing
         every press for the rest of the run, with nothing actually held down to
         justify it - a silent, permanently dead pad.
+
+        Any activity light goes with them, and for the same reason: the moment
+        we can no longer say a key is down is the moment the pad must stop
+        claiming it.
         """
+        self.release_lights()
         with self._lock:
             self._holding.clear()
             self._suppressed.clear()
@@ -551,11 +574,58 @@ class Bridge:
         """
         return self._run(input_id, self.config.action_for(input_id), pressed)
 
+    def _light(self, input_id: str, light: Optional[Any]) -> None:
+        """Say that ``input_id``'s binding just went live, or stopped being.
+
+        "Live" is *the pad key is down*, and nothing more ambitious, because
+        that is the only thing this module can actually observe. A ``hold``
+        binding is therefore exactly right - it is down for as long as your
+        finger is - and a binding that fires and returns is lit for the length
+        of a tap, which is honest but rarely useful; the config layer warns
+        about that at load time rather than letting it be a surprise.
+
+        Never raises. A colour is not worth a dead key path, and the layer this
+        feeds has a timeout of its own for exactly the case where a message
+        about letting go never arrives.
+        """
+        callback = self.on_activity
+        if callback is None:
+            return
+        try:
+            callback(input_id, light)
+        except Exception:  # noqa: BLE001 - lighting must not break the keys
+            pass
+
+    def _end_light(self, input_id: str) -> None:
+        """Retire ``input_id``'s light, if it has one up. Idempotent."""
+        with self._lock:
+            had = self._lit.pop(input_id, False)
+        if had:
+            self._light(input_id, None)
+
+    def release_lights(self) -> int:
+        """Retire every light this bridge has up. Returns how many. Never raises.
+
+        The counterpart of :meth:`release_held_keys`, and called by it: the two
+        answer the same question about different things the pad is left holding,
+        and a run that lets go of a modifier while still claiming the key is
+        down would be telling the user something untrue about their own pad.
+        """
+        with self._lock:
+            lit, self._lit = list(self._lit), {}
+        for input_id in lit:
+            self._light(input_id, None)
+        return len(lit)
+
     def _run(
         self, input_id: str, action: Optional[Action], pressed: bool
     ) -> Optional[Dispatch]:
         """Deliver one resolved binding. ``input_id`` may be a chord id."""
         if not pressed:
+            # Before the suppression check, not after: a press we refused never
+            # lit anything, so this is a no-op there, and a press we *did*
+            # deliver must give its light back on every release path there is.
+            self._end_light(input_id)
             with self._lock:
                 if self._suppressed.pop(input_id, False):
                     # We never sent the press, so sending the release would be
@@ -582,13 +652,21 @@ class Bridge:
                 # Registered before it is delivered, so a hold that fails
                 # halfway is still something we know to let go of.
                 self._holding[input_id] = action
+            if blocker is None and action.light is not None:
+                self._lit[input_id] = True
         if blocker is not None:
+            # A refused press does nothing, so it must not look like it did.
             return Dispatch(
                 input_id=input_id,
                 action=action,
                 suppressed_by=blocker[0],
                 holding=blocker[1],
             )
+        if action.light is not None:
+            # Before delivery, for the same reason `_holding` is: the light
+            # says "this key is down", which is already true, and a hold that
+            # fails halfway still has to be something we know to take back.
+            self._light(input_id, action.light)
         try:
             # One action at a time, whichever thread it came from. Before the
             # settle timer existed every action ran on the pad's read thread and
@@ -609,6 +687,8 @@ class Bridge:
         except ActionError as exc:
             with self._lock:
                 self._holding.pop(input_id, None)
+            # It did not happen, so the pad must stop saying it did.
+            self._end_light(input_id)
             return Dispatch(input_id=input_id, action=action, ok=False, error=str(exc))
         return Dispatch(input_id=input_id, action=action)
 

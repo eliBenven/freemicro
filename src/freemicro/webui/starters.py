@@ -32,6 +32,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Dict, List
 
+from freemicro.padconfig import FACTORY_RECORDING
 from freemicro.webui.layout import KEY_GROUPS
 
 #: The two halves of the wide MIC cap. Named once, used everywhere.
@@ -128,17 +129,48 @@ def combo_problem(choice_id: str, combo: str) -> str:
 DEFAULT_DICTATION = "wispr"
 
 
+def mic_light() -> Dict[str, Any]:
+    """What the pad shows while the mic key is held: the vendor's own look.
+
+    ``docs/FACTORY-DEFAULTS.md`` §1b - the ChatGPT app drives the underglow
+    ``#2E8B57``, snake, speed 0.4 while its voice state is ``recording``. Same
+    principle as the five state colours: the opt-in should look like the pad you
+    bought. The underglow, not the Agent Keys, because those are carrying one
+    project each and that is exactly what you still want to see while you talk.
+    """
+    from freemicro.padconfig import factory_recording_light
+
+    light = factory_recording_light()
+    return {
+        "color": FACTORY_RECORDING,
+        "effect": "snake",
+        "brightness": light.brightness,
+        "speed": light.speed,
+        "zones": list(light.zones),
+    }
+
+
 def dictation_binding(choice_id: str = DEFAULT_DICTATION) -> Dict[str, Any]:
-    """The MIC binding for one dictation choice, ready to write to both ids."""
+    """The MIC binding for one dictation choice, ready to write to both ids.
+
+    A ``hold`` choice gets the recording light; a toggle choice does **not**,
+    and that omission is the feature. FreeMicro sees a toggle's key-down and
+    never learns that dictation stopped, so a light there would go out while the
+    mic was still live - a pad that has quietly started lying. Better nothing
+    than something wrong about a microphone.
+    """
     for choice in DICTATION_CHOICES:
         if choice["id"] == choice_id:
-            return {
+            binding: Dict[str, Any] = {
                 "action": choice["action"],
                 "key": choice["key"],
                 "label": "mic - push to talk"
                 if choice["action"] == "hold"
                 else "mic - dictation",
             }
+            if choice["action"] == "hold":
+                binding["light"] = mic_light()
+            return binding
     return dictation_binding(DEFAULT_DICTATION)
 
 

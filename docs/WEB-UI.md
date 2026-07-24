@@ -47,12 +47,34 @@ That is six interactive things plus the pad. Save and Revert appear in the
 header only when there is something to save or revert.
 
 **Click a key → one modal**, in this order: what it should do (in outcomes, not
-action kinds), the one field that answer needs, which keycap is fitted, and an
-Advanced disclosure for everything else.
+action kinds), the one field that answer needs, *what the pad shows while the
+key is held*, which keycap is fitted, and an Advanced disclosure for everything
+else.
 
-The first three are all **on screen at once**, and each is one click. That is
+The first four are all **on screen at once**, and each is one click. That is
 the point of the modal, and it took a second pass to get right - see *"Cannot
 change a key quickly enough"* below.
+
+### "While this key is held" is one switch, not a lighting panel
+
+Turning it on writes the vendor's own recording look - `#2E8B57`, snake, on the
+underglow ([`CUSTOMIZING.md`](CUSTOMIZING.md#the-pad-changes-colour-while-the-mic-is-live)).
+A colour well and the three zones are on screen; effect, speed, brightness and
+the timeout are one disclosure deeper, because nobody turning this on for a mic
+key has an opinion about any of them yet.
+
+The sentence under the switch **changes with the action kind**, and that is the
+part worth keeping. FreeMicro can only see a key that is *held*: a toggle
+dictation shortcut starts on a tap and stops on an identical one, so a light
+there would go out while the mic was still live. So a binding that is not a
+hold gets told exactly that, in the editor, at the moment somebody is about to
+make the mistake - and the switch still works, because "lit while my finger is
+on it" is a legitimate thing to want. The UI declines to *imply* something it
+cannot deliver rather than declining to do what it was asked.
+
+The list of kinds it can honestly track comes from `HOLD_KINDS` over the API,
+not from a copy of it in the JavaScript, so a new action kind with a release
+starts being tracked here without anyone editing this page.
 
 ### What moved behind a disclosure
 
@@ -62,7 +84,8 @@ Nothing was removed. Everything below is one click from where it belongs:
 |---|---|
 | Action-kind picker per input | Key modal → Advanced (the outcomes cover the common six) |
 | Every action parameter | Key modal → Advanced |
-| Keycap picker | Key modal, third |
+| Keycap picker | Key modal, fourth |
+| A held key's light: effect, speed, brightness, timeout | Key modal → "While this key is held" → Advanced (the switch and the colour are on screen) |
 | Per-state lighting table (colour, effect, brightness, speed, magic) | Click a swatch → colour + effect; speed and magic under Advanced there |
 | `lighting.method` | **Gone from the UI.** `rgbcfg` is correct on this firmware and `preview` is a documented dead end; it is a debugging escape hatch, not a choice |
 | Zones | One toggle in Advanced: "Leave the Agent Keys to the ChatGPT app" |

@@ -24,12 +24,15 @@ from typing import Any, Dict, Optional, Tuple
 
 from freemicro.device.lighting import ZONES
 from freemicro.padconfig import (
+    ACTIVITY_TIMEOUT_MAX,
+    DEFAULT_ACTIVITY_TIMEOUT,
     DEFAULT_CONFIG_PATH,
     JOYSTICK_INPUTS,
     KNOWN_INPUTS,
     LIGHTING_METHODS,
     PadConfigError,
 )
+from freemicro.input.actions import HOLD_KINDS
 from freemicro.state.engine import AgentState
 from freemicro.webui import apps as appdir
 from freemicro.webui import configio, keycaps, layouts, starters
@@ -182,6 +185,18 @@ class Api:
             # Drawn on the diagram, owned by the firmware, not bindable.
             "controls": FIRMWARE_CONTROLS,
             "dictation": starters.DICTATION_CHOICES,
+            # A binding may light the pad while its key is held. The default
+            # offered is the vendor's own recording look, and the two numbers
+            # are the bounds the parser will actually enforce.
+            "activity_light": {
+                "default": starters.mic_light(),
+                "timeout_default": DEFAULT_ACTIVITY_TIMEOUT,
+                "timeout_max": ACTIVITY_TIMEOUT_MAX,
+                # Kinds whose key-up FreeMicro can see. Anything else lights
+                # for the length of a tap, and the UI must say so rather than
+                # let somebody light a toggle and believe it tracks the mic.
+                "tracked_kinds": list(HOLD_KINDS),
+            },
             # Which physical cap is on each key. Presentation only, stored in a
             # top-level section - see freemicro.webui.keycaps.
             "keycaps": keycaps.catalogue(),

@@ -58,7 +58,8 @@ press it - the id is printed.
 
 A plain string is shorthand for `{"action": "text", "text": "…"}`.
 `label` names the binding in logs; `comment` is free text (a string, or a list
-of lines) and is ignored by the loader.
+of lines) and is ignored by the loader; `light` is
+[what the pad shows while the key is held](#the-pad-changes-colour-while-a-key-is-held).
 
 ### Action kinds
 
@@ -204,6 +205,108 @@ backend; AppleScript's `keystroke` is press-and-release in one go.)
 
 If you'd rather have the pad launch the app instead of toggling it, use a shell
 action: `{"action": "shell", "command": "open -a 'Wispr Flow'"}`.
+
+### The pad changes colour while the mic is live
+
+Push-to-talk with no light is a key you have to trust. Give the binding a
+`light` and the pad tells you:
+
+```json
+"ACT10": {
+  "action": "hold", "key": "ctrl+cmd+o", "label": "mic",
+  "light": { "color": "#2E8B57", "effect": "snake", "speed": 0.4,
+             "zones": ["underglow"] }
+}
+```
+
+`freemicro start` and the web UI's key editor write both halves for you when
+you pick a hold-style dictation app. `freemicro keys --list` prints every light
+in your config and exactly when each one goes out.
+
+**This is not the mic key's feature.** Any binding may carry a `light`: hold a
+key while a slow shell command runs, make a key a torch, mark whichever key you
+are most likely to press by accident. The mic is just the one the default ships.
+
+| Field | Values |
+|---|---|
+| `color` | required. `"#RRGGBB"`, `"#f0a"`, `"0xRRGGBB"`, `[r, g, b]`, or a packed integer |
+| `effect` | `off`, `solid`, `snake`, `rainbow`, `breath`, `gradient`, `shallow-breath`. Default `solid` |
+| `brightness`, `speed`, `magic` | `0` - `1`, as in `lighting.states` |
+| `zones` | `underglow` (the default), `backlight`, `agent_keys`. Any combination |
+| `timeout_seconds` | `120` by default, max `600`. See [below](#it-never-sticks) |
+
+#### It is a layer, not a repaint
+
+The light **claims the zones it names and nothing else**, for as long as the key
+is down, and gives them straight back. Three consequences, and all three are the
+point:
+
+* **Your projects stay visible.** The default zone is the underglow precisely
+  because the six Agent Keys are carrying one project each, and that is exactly
+  what you still want to see while you are talking to one of them. It is also
+  where the vendor puts its own recording colour
+  ([`FACTORY-DEFAULTS.md`](FACTORY-DEFAULTS.md) §1b).
+* **Letting go shows the truth as it is *then*.** Nothing is saved and put back.
+  If a project finished mid-sentence, the pad is already green when you release,
+  not green a moment later.
+* **Auto-dim cannot blank the pad mid-hold.** Holding a key is activity; the
+  three-minute timer does not run while a light is up.
+
+#### It never sticks
+
+A release can be lost - a Bluetooth drop mid-hold, the machine sleeping, a
+key-up eaten in a burst - so a key-up is never the only thing that can end it:
+
+* **The pad disconnecting ends it at once.** A key on a pad that is gone is not
+  held, and the run loop knows that without guessing.
+* **The clock ends it regardless**, after `timeout_seconds` (default **120**),
+  and `freemicro run` says so. 120 s is long enough that no real hold reaches
+  it and short enough that a stuck light clears itself while you are still at
+  the desk wondering about it - and it is under the 180 s auto-dim, so a lost
+  release can never outlive the pad's own dimming.
+
+There is **no** "never" setting, on purpose. That is the same guarantee
+`quartz.release_all()` gives for the modifier keys a `hold` leaves down: the
+process that made a claim on your hardware discharges it itself, on every path,
+including the ones nobody remembers to write.
+
+#### Why sea green, and not red
+
+Red is the recording idiom everywhere. Here it is already taken: `error` is
+`#FF0033`. A pad that goes red when you talk *and* red when your agent breaks
+has two meanings for one colour, and the one you would least want to miss is the
+one that stops being believed.
+
+`#2E8B57` is what the ChatGPT app itself drives while its voice state is
+`recording` (§1b), so this is factory parity rather than a colour somebody
+liked - the same principle as the five state colours. It is also clearly apart
+from all five: the nearest is `done` `#00FF4C`, and `#2E8B57` is far darker,
+desaturated and blue-shifted, it lands on a **different physical surface**, and
+it *animates* where every state colour is solid.
+
+#### Toggle dictation cannot be lit honestly
+
+If your dictation app uses a **toggle** shortcut, FreeMicro sees the tap that
+starts recording and then sees nothing at all - the tap that stops it looks
+identical to the one that started it, and no message ever says "recording
+ended". So there is no moment at which the light could correctly go out.
+
+The options were to guess with a timeout, or to not claim what we cannot know.
+A guess is wrong in both directions: too short and the pad goes dark while you
+are still talking, too long and it says you are recording after you have
+stopped. A microphone indicator that is wrong is worse than no indicator, so
+FreeMicro does not ship one.
+
+A `light` on a non-`hold` binding is therefore allowed but lasts exactly as long
+as your finger, and the config layer warns at load time, `freemicro keys --list`
+says so, and the web UI says so in the editor. For dictation: use
+`{"action": "hold"}` and set your dictation app's **push-to-talk (hold)**
+shortcut to the same combo. That is one setting in the other app, and it buys
+you a light that is always right.
+
+Lights on `ENC_CW`, `ENC_CC` and the four `JOY_*` ids are a **load error**, not
+a warning: those report one event and no release, so nothing could ever turn
+the light off.
 
 ### While a `hold` key is down, the other keys stop typing
 
@@ -365,6 +468,12 @@ falls back to the **factory colour** for it, lit solid at full brightness: the
 same value the shipped config spells out, so deleting a state you are happy with
 changes nothing.
 
+A binding's own
+[`light`](#the-pad-changes-colour-while-a-key-is-held) layers over all of this
+while its key is held. It may claim a zone `lighting.zones` does not list - the
+mic default claims the underglow - and that zone is then sent dark in every
+other frame, which is what the factory does with the underglow too.
+
 ### Factory parity
 
 The shipped colours are the **exact factory values**
@@ -399,6 +508,9 @@ Two factory behaviours worth keeping if you edit these:
     the moment an amber key is worth the most is the moment you are away from
     the desk and nothing is resetting the timer. Set `auto_dim_alerts: true` for
     exact factory behaviour.
+  * A key being **held** stops the timer outright, so the pad cannot go dark
+    while a `light` is up. Holding a key is the least ambiguous activity there
+    is, and the factory's own wake rule is "any HID event".
 
 Test a palette by eye:
 

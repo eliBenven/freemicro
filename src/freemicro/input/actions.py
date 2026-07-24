@@ -32,7 +32,16 @@ from __future__ import annotations
 import subprocess
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+)
 
 from freemicro.input import quartz
 from freemicro.input.keys import (
@@ -43,6 +52,10 @@ from freemicro.input.keys import (
     escape_applescript,
     parse_combo,
 )
+
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from freemicro.padconfig import ActivityLight
 
 
 class ActionError(RuntimeError):
@@ -57,6 +70,14 @@ class Action:
     params: Mapping[str, Any] = field(default_factory=dict)
     label: str = ""
     comment: str = ""
+    #: What the pad shows while this binding is live, or ``None``.
+    #:
+    #: Deliberately *not* a parameter of any action kind: it describes the
+    #: binding, not the work. The config layer parses it (it is a
+    #: :class:`freemicro.padconfig.ActivityLight`) and the bridge hands it to
+    #: whoever is driving the LEDs; nothing in this module reads it, which is
+    #: why the type is only imported for checking - ``padconfig`` imports *us*.
+    light: Optional["ActivityLight"] = None
 
     def describe(self) -> str:
         """One-line human summary, used by ``--list`` and ``--dry-run``."""

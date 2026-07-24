@@ -53,6 +53,16 @@ and defaults to **0, meaning off**. Two reasons, in order of weight:
 Turn it on if you run both apps constantly, use only ``solid`` effects, and
 prefer self-healing to precision.
 
+The other kind of ownership
+--------------------------
+:class:`ActivityOverlay` answers a second, smaller version of the same question:
+between the state renderer and a binding that is live *right now* - a held mic
+key, say - which one is the pad showing? It is here rather than next to the
+renderer because it is the same kind of thing as everything above: it holds no
+device, sends nothing, and only decides. And it carries the obligation that
+comes with any claim on the hardware - the claim has to be given back even when
+nobody remembers to give it back. See :data:`ActivityOverlay.poll`.
+
 Nothing in here opens the device or writes to it. It decides *when* the renderer
 should send again, and the renderer does the sending.
 """
@@ -61,7 +71,9 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -378,6 +390,8 @@ def coexist_advice(lighting: LightingConfig, vendor_running: bool) -> str:
 # Reasserting
 # ---------------------------------------------------------------------------
 
+REASON_ACTIVITY_TIMEOUT = "activity-timeout"
+REASON_ACTIVITY_DROPPED = "activity-dropped"
 REASON_RECONNECT = "reconnect"
 REASON_VENDOR_QUIT = "vendor-quit"
 REASON_VENDOR_STARTED = "vendor-started"
@@ -402,6 +416,136 @@ class LightingEvent:
     reasserted: bool = True
     #: True for events only worth printing at raised verbosity.
     verbose_only: bool = False
+
+
+class ActivityOverlay:
+    """Which live binding, if any, is currently colouring the pad.
+
+    Fed by :class:`freemicro.input.bridge.Bridge` (one call when a binding with
+    a ``light`` goes live, one when it stops) and read once per render tick by
+    whoever is driving the LEDs. It stores an intention, never a frame: the
+    renderer composes the layer with the live agent state every time it paints,
+    so taking the layer away is not an undo and cannot leave anything behind.
+
+    Two keys at once
+    ----------------
+    Newest wins. The pad has one underglow, somebody has to be showing on it,
+    and the key you pressed most recently is the one you are thinking about.
+    The older layer is not forgotten - it comes back the moment the newer key
+    is released, if it is still held.
+
+    Losing the release
+    ------------------
+    The whole design rests on someone telling us the key came back up, and that
+    message can be lost: a Bluetooth drop mid-hold, a sleep, a key-up eaten in a
+    burst. So it is never the only thing that can end a layer.
+
+    * **The pad going away ends it, immediately** (:meth:`clear`). This is the
+      common case and it is not a guess - the run loop knows the device
+      disconnected, and a layer that says "a key on that pad is down" is false
+      the instant it does.
+    * **The clock ends it regardless** (:meth:`poll`), after the light's own
+      ``timeout_seconds`` - 120 s by default, see
+      :data:`freemicro.padconfig.DEFAULT_ACTIVITY_TIMEOUT`. Decided from the
+      clock alone, exactly as ``freemicro.input.pointer`` stops the cursor on a
+      stale sample and ``freemicro.input.quartz.release_all`` gets the modifier
+      keys back up: the process that made a claim on the hardware discharges it
+      itself, on every path, including the ones where nothing tells it to.
+
+    Both say so out loud. A pad that quietly stops showing something is how a
+    user learns not to trust what it shows.
+    """
+
+    def __init__(
+        self,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        #: Monotonic by default: every interval here is a duration, and an NTP
+        #: step must not be able to expire - or indefinitely extend - a hold.
+        self._clock = clock
+        self._lock = threading.RLock()
+        #: input id -> (light, deadline). Insertion-ordered, newest last.
+        self._active: "OrderedDict[str, Tuple[Any, float]]" = OrderedDict()
+
+    # -- the bridge's side -------------------------------------------------
+
+    def note(self, input_id: str, light: Optional[Any]) -> None:
+        """``Bridge.on_activity``: this binding went live, or stopped being.
+
+        Cheap on purpose - a lock, a dict write and one clock read - because it
+        runs on the thread reading key events. It writes nothing to the pad;
+        the repaint happens on the next render tick, like every other frame.
+        """
+        with self._lock:
+            if light is None:
+                self._active.pop(input_id, None)
+                return
+            self._active.pop(input_id, None)  # re-insert, so newest is last
+            timeout = float(getattr(light, "timeout_seconds", 0.0) or 0.0)
+            self._active[input_id] = (light, self._clock() + timeout)
+
+    # -- the render loop's side -------------------------------------------
+
+    @property
+    def current(self) -> Optional[Any]:
+        """The layer to show right now, or ``None`` for plain agent state."""
+        with self._lock:
+            if not self._active:
+                return None
+            return next(reversed(self._active.values()))[0]
+
+    @property
+    def active(self) -> Tuple[str, ...]:
+        """Which input ids are holding a layer up. Oldest first."""
+        with self._lock:
+            return tuple(self._active)
+
+    def poll(self, now: Optional[float] = None) -> Optional[LightingEvent]:
+        """Drop any layer whose hold has outlasted its timeout.
+
+        Called once per render tick, before the frame is built, so the tick that
+        notices is the tick that repaints. Returns an event to print when it
+        takes something down and ``None`` the rest of the time - which is every
+        tick of every normal run, because a key that is released ends its own
+        layer long before this can.
+        """
+        moment = self._clock() if now is None else now
+        with self._lock:
+            expired = [
+                input_id for input_id, (_, deadline) in self._active.items()
+                if deadline <= moment
+            ]
+            for input_id in expired:
+                del self._active[input_id]
+        if not expired:
+            return None
+        return LightingEvent(
+            REASON_ACTIVITY_TIMEOUT,
+            f"{', '.join(expired)} never reported a key-up, so its light has "
+            "been taken\ndown from the clock. The pad drops on sleep and on "
+            "range; press and\nrelease the key to prove it is back.",
+            reasserted=False,
+        )
+
+    def clear(self, reason: str = "") -> Optional[LightingEvent]:
+        """Take every layer down now. Idempotent, and never raises.
+
+        For the moments the run loop *knows* a held key can no longer be held -
+        the pad disconnecting is the one that matters - so that the common way
+        to lose a release does not have to wait out a timeout meant for the
+        uncommon ones.
+        """
+        with self._lock:
+            dropped = list(self._active)
+            self._active.clear()
+        if not dropped:
+            return None
+        return LightingEvent(
+            REASON_ACTIVITY_DROPPED,
+            f"cleared the light held by {', '.join(dropped)}"
+            + (f" ({reason})" if reason else ""),
+            reasserted=False,
+        )
 
 
 class LightingOwner:
@@ -656,11 +800,14 @@ __all__ = [
     "CAPABILITIES",
     "CAPABILITY_INPUT",
     "CAPABILITY_LIGHTING",
+    "ActivityOverlay",
     "Conflict",
     "Contention",
     "LightingEvent",
     "LightingOwner",
     "QUIET_SECONDS",
+    "REASON_ACTIVITY_DROPPED",
+    "REASON_ACTIVITY_TIMEOUT",
     "REASON_CONFIG",
     "REASON_CONFIG_BROKEN",
     "REASON_HEARTBEAT",

@@ -1411,6 +1411,11 @@ function keyModalBody(id) {
     }
   }
 
+  // 2b. What the pad shows while it is held. On the front of the modal, not
+  //     behind Advanced: "the pad changes colour while the mic is live" is a
+  //     thing people come here to turn on, and it is one switch.
+  parts.push(activityLightField(id, bound));
+
   // 3. Which cap is on it. Always on screen, never behind a disclosure: the
   //    cap and the outcome are the two things people open this modal to
   //    change, so both are one click away from the diagram.
@@ -1426,6 +1431,138 @@ function keyModalBody(id) {
       class: 'btn primary', type: 'button', onclick: () => closeModal(),
     }, 'Done')));
   return parts;
+}
+
+/* ------------------------------------- the light while a key is held down */
+
+/* Human names for the three lighting surfaces. The config's own words are
+ * fine in a config; "the strip under the pad" is what somebody choosing needs. */
+const ZONE_LABELS = {
+  underglow: 'Underglow (the strip under the pad)',
+  backlight: 'Backlight (under the keycaps)',
+  agent_keys: 'The six Agent Keys',
+};
+
+/* A binding's `light` is a LAYER over the agent-state colours: it claims the
+ * zones it names for exactly as long as the key is down and gives them straight
+ * back, so the Agent Keys go on carrying six projects while the underglow says
+ * you are talking. That is why the default is the underglow and why turning
+ * this on never costs you the status display.
+ *
+ * The honesty rule this control exists to keep: FreeMicro can only see a key
+ * that is HELD. A toggle shortcut starts dictation on a tap and stops it on
+ * another tap that looks identical, so a light on one would go out while the
+ * mic was still live. The sentence under the switch therefore changes with the
+ * action kind, instead of being one reassuring line that is true for only half
+ * of them. */
+function activityLightField(id, bound) {
+  if (!bound || bound.action === 'none') return null;
+  const meta = (S.schema && S.schema.activity_light) || {};
+  const fallback = { color: '#2E8B57', effect: 'snake', speed: 0.4,
+                     brightness: 1, zones: ['underglow'] };
+  const tracked = (meta.tracked_kinds || []).includes(bound.action);
+  const light = (bound.light && typeof bound.light === 'object')
+    ? bound.light : null;
+  const touch = () => { syncPair(id); changed(); renderPad(); };
+
+  const rows = [
+    el('h3', { text: 'While this key is held' }),
+    toggle(!!light, 'Change the pad’s colour', (want) => {
+      if (want) bound.light = JSON.parse(JSON.stringify(meta.default || fallback));
+      else delete bound.light;
+      touch();
+      reopenKey(id);
+    }),
+  ];
+
+  if (!light) {
+    rows.push(el('p', { class: 'hint' }, tracked
+      ? 'Off. The pad keeps showing your projects the whole time.'
+      : 'Off. See the note below before turning it on for dictation.'));
+    if (!tracked) rows.push(untrackedWarning(bound));
+    return el('div', { class: 'field' }, rows);
+  }
+
+  rows.push(el('div', { class: 'row' },
+    el('input', {
+      type: 'color', value: toHex(light.color || fallback.color),
+      oninput: (e) => { light.color = e.target.value.toUpperCase(); touch(); },
+    }),
+    el('span', { class: 'hint' },
+      'The vendor’s own colour while it is listening to you. Not red - red ' +
+      'is “error”, and one colour cannot mean two things.')));
+
+  const zones = Array.isArray(light.zones) ? light.zones : ['underglow'];
+  rows.push(el('div', { class: 'field' },
+    el('span', { class: 'field-label', text: 'Which lights' }),
+    (S.schema.zones || []).map((zone) => el('label', { class: 'check' },
+      el('input', {
+        type: 'checkbox', checked: zones.includes(zone),
+        onchange: (e) => {
+          const next = zones.filter((z) => z !== zone);
+          if (e.target.checked) next.push(zone);
+          // Never none: a light with nowhere to show is a setting that does
+          // nothing, and the config layer would refuse it anyway.
+          light.zones = next.length ? next : [zone];
+          touch();
+          reopenKey(id);
+        },
+      }),
+      ZONE_LABELS[zone] || zone))));
+
+  rows.push(el('p', { class: 'hint' }, tracked
+    ? 'On from the moment the key goes down until it comes back up. If that ' +
+      'key-up is never reported - a Bluetooth drop mid-hold - the light is ' +
+      'taken down after ' + (Number(light.timeout_seconds) ||
+        meta.timeout_default || 120) + 's from the clock, and the pad ' +
+      'disconnecting takes it down at once. It never sticks.'
+    : ''));
+  if (!tracked) rows.push(untrackedWarning(bound));
+
+  rows.push(el('details', { class: 'escape' },
+    el('summary', { text: 'Advanced' }),
+    el('div', { class: 'field' },
+      el('span', { class: 'field-label', text: 'Effect' }),
+      picker({
+        value: effectName(light.effect),
+        options: S.schema.effects.map((eff) => ({
+          value: eff.name, label: eff.name, hint: EFFECT_HELP[eff.name] || '',
+          terms: eff.name + ' ' + (EFFECT_HELP[eff.name] || ''),
+        })),
+        search: 'Search effects',
+        onpick: (value) => { light.effect = value; touch(); reopenKey(id); },
+      })),
+    slider('Speed', unit(light.speed, 0), (v) => { light.speed = v; touch(); },
+      animated(light) ? '' :
+        `“${effectName(light.effect)}” does not animate, so speed does nothing.`),
+    slider('Brightness', unit(light.brightness, 1),
+      (v) => { light.brightness = v; touch(); }),
+    el('div', { class: 'field' },
+      el('span', { class: 'field-label', text: 'Give up after (seconds)' }),
+      el('input', {
+        type: 'number', min: '1', max: String(meta.timeout_max || 600),
+        value: String(Number(light.timeout_seconds) ||
+                      meta.timeout_default || 120),
+        oninput: (e) => {
+          const next = Number(e.target.value);
+          if (next > 0) { light.timeout_seconds = next; touch(); }
+        },
+      }),
+      el('p', { class: 'hint' },
+        'There is no “never”, on purpose: a release can be lost, and a light ' +
+        'with nothing to end it would claim the key was still down until you ' +
+        'restarted FreeMicro.'))));
+
+  return el('div', { class: 'field' }, rows);
+}
+
+function untrackedWarning(bound) {
+  return el('p', { class: 'hint' },
+    '“' + bound.action + '” fires and returns, so this lasts about as long ' +
+    'as a tap. FreeMicro sees the press that starts a toggle and never ' +
+    'learns that it stopped, so it will not pretend to: for dictation, ' +
+    'choose “Hold to talk” above and set your dictation app’s push-to-talk ' +
+    '(hold) shortcut to the same combo.');
 }
 
 const fieldLabel = (outcome) => ({
@@ -1523,6 +1660,7 @@ function setKindQuiet(id, kind) {
   }
   if (previous.label) next.label = previous.label;
   if (previous.comment) next.comment = previous.comment;
+  if (previous.light) next.light = previous.light;
   writeBinding(id, next);
 }
 
@@ -1707,6 +1845,9 @@ function setKind(id, kind) {
     }
     if (previous.label) next.label = previous.label;
     if (previous.comment) next.comment = previous.comment;
+    // `light` belongs to the binding, not to the kind - see _META_FIELDS in
+    // padconfig - so it survives a change of kind like the label does.
+    if (previous.light) next.light = previous.light;
     writeBinding(id, next);
   }
   changed();

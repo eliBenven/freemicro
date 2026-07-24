@@ -844,6 +844,44 @@ def _open_pad(headless: bool = False):
     return None
 
 
+def _print_activity_lights(pad) -> None:
+    """What the pad shows while a key is held, and what it cannot show.
+
+    Printed as its own section rather than tacked onto the binding line,
+    because the interesting part is not the colour - it is the two sentences
+    underneath about when it goes out. A user who never reads them is the user
+    who later reports that "the mic light is wrong".
+    """
+    from freemicro.input.actions import HOLD_KINDS
+
+    lit = pad.activity_lights()
+    if not lit:
+        return
+    print("\nLights while the key is held")
+    for input_id, action in lit:
+        print(f"  {input_id:9} {action.label:16} {action.light.describe()}")
+    for input_id, action in lit:
+        timeout = action.light.timeout_seconds
+        print(
+            f"  {input_id}: on from the key going down until it comes back "
+            f"up.\n    If that key-up is never reported - a Bluetooth drop "
+            f"mid-hold, a sleep -\n    the light is taken down after "
+            f"{timeout:g}s from the clock alone, and said\n    so in the log. "
+            "The pad disconnecting takes it down at once."
+        )
+        if action.kind not in HOLD_KINDS:
+            print(
+                f"    '{action.kind}' fires and returns, so this lasts about as "
+                "long as a tap.\n    FreeMicro cannot see a toggle stop, so it "
+                "will not pretend to: for\n    dictation use {\"action\": "
+                "\"hold\"} and set your dictation app's\n    push-to-talk "
+                "(hold) shortcut to the same combo."
+            )
+    if not pad.lighting.enabled:
+        print("  (lighting is off, so none of this shows: "
+              "freemicro lights --enable)")
+
+
 def _print_keymap(pad) -> None:
     from freemicro.device.lighting import color_to_hex, effect_name
     from freemicro.input.actions import action_help
@@ -885,6 +923,8 @@ def _print_keymap(pad) -> None:
         elif pad.chord_settle_ms > 0:
             print("\n  No key waits for anything: every chord member is "
                   "unbound on its own,\n  so these add no delay at all.")
+
+    _print_activity_lights(pad)
 
     print("\nLighting")
     lighting = pad.lighting
@@ -1765,6 +1805,7 @@ def _run_pipeline(
     from freemicro.lighting_owner import (
         REASON_CONFIG,
         REASON_CONFIG_BROKEN,
+        ActivityOverlay,
         LightingOwner,
         coexist_advice,
         vendor_app_running,
@@ -1780,6 +1821,12 @@ def _run_pipeline(
     # Defends our colours against the other app writing them, and reloads the
     # config in place when it changes. Costs one clock read per key event.
     owner = LightingOwner(config=pad)
+    # What a live binding is asking the pad to show. Held here rather than in
+    # the bridge or the renderer because it is neither's business: the bridge
+    # knows when a key is down and nothing about colour, the renderer paints and
+    # remembers nothing, and this is the one thing that has to outlive a
+    # reconnect and answer to a clock.
+    overlay = ActivityOverlay()
 
     device = _open_pad(headless=headless)
     if device is None:
@@ -1792,7 +1839,8 @@ def _run_pipeline(
     # prints when it actually fires, not when the next event happens to
     # arrive. A readout that lags the key it is describing is worse than
     # none while somebody is tuning chords.
-    bridge = Bridge(pad, backend, on_dispatch=_print_dispatch)
+    bridge = Bridge(pad, backend, on_dispatch=_print_dispatch,
+                    on_activity=overlay.note)
     last: AgentState | None = None
     override = Path(args.config).expanduser() if getattr(args, "config", None) else None
     config_watcher = staleness.ConfigWatcher(
@@ -1875,6 +1923,10 @@ def _run_pipeline(
         renderers = []
         last = None
         owner.attach(None)
+        # A key on a pad that is gone is not held. Said here rather than left to
+        # the overlay's timeout because this is the common way a release goes
+        # missing, and it is the one case we do not have to guess about.
+        _print_lighting(overlay.clear("the pad disconnected"), verbose)
         print("  [pad disconnected - waiting for it to come back. This is normal;"
               "\n   the pad drops on sleep, on range, on a nudged cable.]",
               flush=True)
@@ -1903,6 +1955,9 @@ def _run_pipeline(
         # cache, so acting on it here means the resend happens in *this* tick.
         for event in owner.poll():
             lighting_event(event)
+        # Before the frame is built, so the tick that notices a hold has
+        # outlasted its timeout is the tick that repaints without it.
+        _print_lighting(overlay.poll(), verbose)
         reload_config()
         if watcher is not None:
             decision = watcher.poll()
@@ -1915,7 +1970,11 @@ def _run_pipeline(
                     # close the pad before anyone calls execv.
                     raise staleness.RestartRequested()
         state = store.resolved_state()
+        live = overlay.current
         for renderer in renderers:
+            set_overlay = getattr(renderer, "set_overlay", None)
+            if callable(set_overlay):
+                set_overlay(live)
             renderer.render(state)
         if state != last:
             # Unconditional. This one line is the whole of what the screen

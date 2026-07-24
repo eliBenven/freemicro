@@ -51,7 +51,12 @@ from freemicro.device.lighting import (
     parse_zone,
     preview_zone,
 )
-from freemicro.input.actions import FOCUS_SESSION, Action, validate_params
+from freemicro.input.actions import (
+    FOCUS_SESSION,
+    HOLD_KINDS,
+    Action,
+    validate_params,
+)
 from freemicro.state.engine import AgentState
 
 #: Environment variable that overrides where the config is read from.
@@ -101,7 +106,13 @@ KNOWN_INPUTS: Tuple[str, ...] = (
 )
 
 #: Per-binding keys that describe the binding rather than parameterise it.
-_META_FIELDS = ("action", "label", "comment")
+#:
+#: ``light`` is here rather than in any action kind's ``optional`` list on
+#: purpose: what the pad *shows* while a binding is live is a property of the
+#: binding, not a parameter of what it does. Putting it here means every kind
+#: gets it at once, including kinds added after this was written, and no kind
+#: has to remember to declare it.
+_META_FIELDS = ("action", "label", "comment", "light")
 
 # ---------------------------------------------------------------------------
 # Chords
@@ -320,6 +331,108 @@ def factory_light(state: AgentState) -> StateLight:
     )
 
 
+#: The colour the pad you bought already uses while it is listening to you.
+#:
+#: ``docs/FACTORY-DEFAULTS.md`` §1b: while the vendor app's voice state is
+#: ``recording`` it drives the **underglow** ``#2E8B57`` with ``snake`` at speed
+#: 0.4. So "the pad changes colour while the mic is live" is not a new idea we
+#: are inventing a colour for - it is a factory behaviour with a factory value,
+#: and copying it is the same promise the five state colours keep.
+#:
+#: Why not red, which is the recording idiom everywhere else: ``error`` is
+#: ``#FF0033``. A pad that goes red when you talk *and* red when your agent
+#: breaks has two meanings for one colour, and the one you would least want to
+#: miss is the one that stops being believed.
+#:
+#: It is also clearly apart from the five state colours. The nearest is ``done``
+#: ``#00FF4C``, and it is not close: ``#2E8B57`` is far darker, desaturated and
+#: blue-shifted, it lands on a **different physical surface** (the underglow,
+#: not the six Agent Keys), and it *animates* where every state colour is
+#: solid. Three separations, not one.
+FACTORY_RECORDING = "#2E8B57"
+
+#: How long an activity light may stay on with nothing having ended it, before
+#: FreeMicro takes it down from the clock alone.
+#:
+#: A release can be lost - a Bluetooth drop mid-hold, a sleep, a key-up eaten in
+#: a burst - and a light that only a key-up can clear would then claim you are
+#: still dictating until you restarted FreeMicro. This is the same shape as
+#: :func:`freemicro.input.quartz.release_all` for stuck modifiers and the
+#: pointer's stale-sample stop: an obligation the process that started it has to
+#: discharge on its own, decided from the clock and nothing else.
+#:
+#: **120 seconds.** Long enough that no real push-to-talk hold reaches it - two
+#: unbroken minutes of held dictation is already extraordinary - and short
+#: enough that a stuck light clears itself while you are still at the desk
+#: wondering about it. It is also under :attr:`LightingConfig.auto_dim_seconds`
+#: (180), so a lost release can never outlive the pad's own dimming policy.
+DEFAULT_ACTIVITY_TIMEOUT = 120.0
+
+#: The longest timeout a config may ask for. Beyond ten minutes the backstop has
+#: stopped being a backstop.
+ACTIVITY_TIMEOUT_MAX = 600.0
+
+_ACTIVITY_LIGHT_FIELDS = (
+    "color", "effect", "brightness", "speed", "magic", "zones",
+    "timeout_seconds", "comment",
+)
+
+
+@dataclass(frozen=True)
+class ActivityLight(StateLight):
+    """What the pad shows while one binding is live. A layer, not a state.
+
+    The five :class:`StateLight` colours answer "what is my agent doing?" and
+    they are the pad's real job. This answers a different question - "is this
+    key doing its thing *right now*?" - and it must never destroy the answer to
+    the first one. So it is composed **over** the state frame at render time
+    rather than written to the pad on key-down and undone on key-up: the state
+    renderer keeps ownership of every zone this does not name, and the moment
+    the layer goes away the very next frame is the live state, whatever that
+    state has become in the meantime. Nothing has to remember what to put back.
+
+    :attr:`zones` defaults to the underglow for the reason the vendor puts its
+    own recording colour there (``docs/FACTORY-DEFAULTS.md`` §1b): the six Agent
+    Keys are carrying one project each, and that is exactly what you still want
+    to be able to see while you are talking to one of them.
+
+    :attr:`timeout_seconds` is not optional and cannot be switched off. See
+    :data:`DEFAULT_ACTIVITY_TIMEOUT`.
+    """
+
+    zones: Sequence[str] = (ZONE_UNDERGLOW,)
+    timeout_seconds: float = DEFAULT_ACTIVITY_TIMEOUT
+
+    @property
+    def drives_backlight(self) -> bool:
+        return ZONE_BACKLIGHT in self.zones
+
+    @property
+    def drives_underglow(self) -> bool:
+        return ZONE_UNDERGLOW in self.zones
+
+    @property
+    def drives_agent_keys(self) -> bool:
+        return ZONE_AGENT_KEYS in self.zones
+
+    def describe(self) -> str:
+        return (
+            f"{color_to_hex(self.color)} {effect_name(self.effect)} "
+            f"b={self.brightness:g} s={self.speed:g} on "
+            f"{', '.join(self.zones)}"
+        )
+
+
+def factory_recording_light() -> ActivityLight:
+    """The vendor's dictation look, whole. See :data:`FACTORY_RECORDING`."""
+    return ActivityLight(
+        color=parse_color(FACTORY_RECORDING),
+        effect=parse_effect("snake"),
+        brightness=1.0,
+        speed=0.4,
+    )
+
+
 @dataclass(frozen=True)
 class ReassertConfig:
     """When FreeMicro re-sends the lighting it already sent.
@@ -502,6 +615,43 @@ class PadConfig:
         """The binding for a set of keys pressed together, order-independent."""
         return self.chords.get(chord_key(members))
 
+    def activity_lights(self) -> Tuple[Tuple[str, Action], ...]:
+        """Every binding that lights the pad while it is live, chords included.
+
+        Ordered for display: single inputs in physical order first, then
+        anything unrecognised, then chords.
+        """
+        found: List[Tuple[str, Action]] = []
+        ordered = [i for i in KNOWN_INPUTS if i in self.bindings]
+        ordered += [i for i in self.bindings if i not in KNOWN_INPUTS]
+        for input_id in ordered:
+            action = self.bindings[input_id]
+            if action.light is not None:
+                found.append((input_id, action))
+        for members in sorted(self.chords):
+            action = self.chords[members]
+            if action.light is not None:
+                found.append((chord_label(members), action))
+        return tuple(found)
+
+    @property
+    def activity_zones(self) -> Tuple[str, ...]:
+        """Every zone some binding's light can claim, whether or not it is live.
+
+        The renderer needs this to be a property of the *config* rather than of
+        the moment: it is what makes "which zones does this process drive?" a
+        fixed answer, so a zone the state lighting never touches is painted dark
+        in every ordinary frame and lit only while the layer is up. Without it
+        the renderer would have to remember what it had lit and undo it, which
+        is exactly the design this feature is meant to avoid.
+        """
+        zones: List[str] = []
+        for _, action in self.activity_lights():
+            for zone in action.light.zones:
+                if zone not in zones:
+                    zones.append(zone)
+        return tuple(zones)
+
     def chord_partners(self, input_id: str) -> Tuple[str, ...]:
         """Every key that forms a chord with ``input_id``. Empty for most keys.
 
@@ -525,6 +675,84 @@ class PadConfig:
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
+
+def _parse_activity_light(input_id: str, raw: Any) -> ActivityLight:
+    """Parse one binding's ``light``. Strict, because a typo here is invisible.
+
+    The one field with no "off" setting is ``timeout_seconds``: see
+    :data:`DEFAULT_ACTIVITY_TIMEOUT` for why a light nothing can be relied on
+    to clear is not a thing this config is allowed to describe.
+    """
+    if is_chord_id(input_id):
+        members = parse_chord_id(input_id)
+    else:
+        members = (input_id,)
+    momentary = [m for m in members if m in _MOMENTARY_INPUTS]
+    if momentary:
+        raise PadConfigError(
+            f"binding {input_id!r} cannot take a \"light\": "
+            f"{', '.join(momentary)} report one event and no release, so "
+            "nothing would ever turn the light off again. A light belongs on "
+            "an input you can hold."
+        )
+    if not isinstance(raw, dict):
+        raise PadConfigError(
+            f"binding {input_id!r}: \"light\" must be an object, e.g. "
+            "{\"color\": \"" + FACTORY_RECORDING + "\", \"effect\": \"snake\"}"
+        )
+    if "color" not in raw:
+        raise PadConfigError(f"binding {input_id!r}: \"light\" needs a \"color\"")
+    unknown = {k for k in raw if not k.startswith("_")} - set(_ACTIVITY_LIGHT_FIELDS)
+    if unknown:
+        raise PadConfigError(
+            f"binding {input_id!r}: \"light\" has unknown field(s): "
+            f"{', '.join(sorted(unknown))}; it takes: "
+            f"{', '.join(_ACTIVITY_LIGHT_FIELDS)}"
+        )
+
+    zones_raw = raw.get("zones", ActivityLight.zones)
+    if isinstance(zones_raw, str):
+        zones_raw = [zones_raw]
+    if not isinstance(zones_raw, (list, tuple)) or not zones_raw:
+        raise PadConfigError(
+            f"binding {input_id!r}: \"light.zones\" must be a non-empty list"
+        )
+    try:
+        zones = tuple(dict.fromkeys(parse_zone(z) for z in zones_raw))
+        color = parse_color(raw["color"])
+        effect = parse_effect(raw.get("effect", "solid"))
+        brightness = float(raw.get("brightness", 1.0))
+        speed = float(raw.get("speed", 0.0))
+        magic = None if raw.get("magic") is None else float(raw["magic"])
+        timeout = float(raw.get("timeout_seconds", DEFAULT_ACTIVITY_TIMEOUT))
+    except (LightingError, TypeError, ValueError) as exc:
+        raise PadConfigError(f"binding {input_id!r}: light: {exc}") from exc
+
+    for name, value in (
+        ("brightness", brightness), ("speed", speed), ("magic", magic),
+    ):
+        if value is not None and not 0.0 <= value <= 1.0:
+            raise PadConfigError(
+                f"binding {input_id!r}: light.{name} must be between 0 and 1"
+            )
+    if not 0.0 < timeout <= ACTIVITY_TIMEOUT_MAX:
+        raise PadConfigError(
+            f"binding {input_id!r}: \"light.timeout_seconds\" must be more "
+            f"than 0 and at most {ACTIVITY_TIMEOUT_MAX:g}. There is no 'never' "
+            "here on purpose: a Bluetooth drop mid-hold loses the key-up, and "
+            "a light with nothing to end it would then claim the key was still "
+            "down until you restarted FreeMicro."
+        )
+    return ActivityLight(
+        color=color,
+        effect=effect,
+        brightness=brightness,
+        speed=speed,
+        magic=magic,
+        zones=zones,
+        timeout_seconds=timeout,
+    )
+
 
 def _parse_binding(input_id: str, raw: Any) -> Action:
     if isinstance(raw, str):
@@ -557,11 +785,15 @@ def _parse_binding(input_id: str, raw: Any) -> Action:
         validate_params(kind, params)
     except ValueError as exc:
         raise PadConfigError(f"binding for {input_id!r}: {exc}") from exc
+    light = (
+        _parse_activity_light(input_id, raw["light"]) if "light" in raw else None
+    )
     return Action(
         kind=kind,
         params=params,
         label=str(raw.get("label") or input_id),
         comment=_join_comment(raw.get("comment")),
+        light=light,
     )
 
 
@@ -938,6 +1170,34 @@ def parse(data: Any, source: Optional[Path] = None) -> PadConfig:
     lighting = _parse_lighting(data.get("lighting"))
     agent_keys = _parse_agent_keys(data.get("agent_keys"), warnings)
 
+    lit = [
+        (input_id, action)
+        for input_id, action in list(bindings.items())
+        + [(chord_label(m), a) for m, a in chords.items()]
+        if action.light is not None
+    ]
+    for input_id, action in lit:
+        if action.kind not in HOLD_KINDS:
+            # Not an error: "lit while the key is down" is a coherent thing for
+            # any key to do, and a torch is a legitimate use of it. But the
+            # reason people reach for this is dictation, and a *toggle* bound
+            # here gives a flash of colour and then darkness while the mic is
+            # still live - a pad that has stopped telling the truth. Say it at
+            # load time, once, rather than letting it be discovered in use.
+            warnings.append(
+                f"{input_id!r} has a \"light\" but its action is "
+                f"'{action.kind}', so the light lasts exactly as long as your "
+                "finger is on the key. If this is dictation, FreeMicro cannot "
+                "see a toggle stop - use {\"action\": \"hold\"} and set your "
+                "dictation app's push-to-talk (hold) shortcut to match."
+            )
+    if lit and not lighting.enabled:
+        warnings.append(
+            "lighting.enabled is false, so the \"light\" on "
+            f"{', '.join(repr(i) for i, _ in lit)} will not show. Turn the LEDs "
+            "on once with: freemicro lights --enable"
+        )
+
     if joystick.pointing:
         # The stick is driving the cursor, so its four flick ids never fire.
         # Saying so is the difference between "my binding is broken" and "ah,
@@ -1064,8 +1324,13 @@ def write_starter(path: Optional[Path] = None, force: bool = False) -> Path:
 
 __all__ = [
     "ACTION_KEYS",
+    "ACTIVITY_TIMEOUT_MAX",
     "AGENT_KEYS",
+    "ActivityLight",
     "AgentKeysConfig",
+    "DEFAULT_ACTIVITY_TIMEOUT",
+    "FACTORY_RECORDING",
+    "factory_recording_light",
     "CHORD_MAX_KEYS",
     "CHORD_SEPARATOR",
     "CHORD_SETTLE_MS_MAX",

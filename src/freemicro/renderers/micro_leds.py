@@ -74,6 +74,28 @@ behind more than one "the lights just stopped" report. So a failure now:
   framed write returns ``kIOReturnSuccess`` and is discarded, so "the write went
   out" is the strongest thing any message here is allowed to say.
 
+A layer for "this key is doing its thing right now"
+---------------------------------------------------
+A binding can carry a ``light`` (:class:`freemicro.padconfig.ActivityLight`) -
+the mic key is the shipped case, and push-to-talk is the reason it exists. The
+rule that makes it safe is that it is **composed, never written**:
+:meth:`~MicroLedsRenderer.set_overlay` only records the layer, and the next
+ordinary frame is built from the live state *and* the layer together. Three
+things follow from that, and all three were the point:
+
+* the zones the layer does not name keep showing agent state, so the six Agent
+  Keys go on carrying six projects while you dictate;
+* letting go restores the truth **as it is then**, not as it was when the key
+  went down - there is no saved frame to put back, so a project that finished
+  mid-sentence is already green when you release;
+* nothing has to be undone, so no failure path can strand a colour on the pad.
+
+The zones a layer *can* claim are a property of the config, not of the moment
+(:attr:`freemicro.padconfig.PadConfig.activity_zones`), so a zone the state
+lighting never drives is painted dark in every ordinary frame and lit only
+while the layer is up. That is what keeps "who owns this zone?" answerable
+without the renderer remembering anything.
+
 Auto-dim, and the one place we do not copy the factory
 ------------------------------------------------------
 The factory blanks the whole pad after three minutes of inactivity, and dim
@@ -115,6 +137,9 @@ from typing import Any, Callable, List, Optional, Sequence, Tuple
 from freemicro.agentkeys import AgentSlot, SlotResolver
 from freemicro.device import Device, close_shared, shared_device
 from freemicro.device.lighting import (
+    ZONE_AGENT_KEYS,
+    ZONE_BACKLIGHT,
+    ZONE_UNDERGLOW,
     all_agent_keys,
     parse_effect,
     preview_message,
@@ -123,7 +148,13 @@ from freemicro.device.lighting import (
     thread_entry,
     thstatus_message,
 )
-from freemicro.padconfig import LightingConfig, PadConfig, PadConfigError, StateLight
+from freemicro.padconfig import (
+    ActivityLight,
+    LightingConfig,
+    PadConfig,
+    PadConfigError,
+    StateLight,
+)
 from freemicro.padconfig import load as load_padconfig
 from freemicro.renderers.base import Renderer, register
 from freemicro.state.engine import AgentState
@@ -323,6 +354,9 @@ class MicroLedsRenderer(Renderer):
         self._dimmed = False
         self._dim_asserted = False
         self._activity_at = clock()
+        #: The layer a live binding has put over the state lighting, if any.
+        #: Only ever *read* when a frame is built - see :meth:`set_overlay`.
+        self._overlay: Optional[ActivityLight] = None
         #: Consecutive failed writes, and when the next attempt may go out.
         self._failures = 0
         self._failed_at = 0.0
@@ -369,6 +403,9 @@ class MicroLedsRenderer(Renderer):
         self._published = ()
         self._frame = None
         self._model = None
+        # The layer itself survives a reload - a key is still physically down -
+        # but which zones it may claim came from the old file, so the frame it
+        # describes has to be rebuilt. Clearing _frame above is that rebuild.
         # A settings change is activity in the factory's own model (§4), which
         # is what makes editing colours in the web UI wake a dimmed pad.
         self._wake(self._clock())
@@ -481,7 +518,8 @@ class MicroLedsRenderer(Renderer):
             return
         now = self._clock()
         slots = self.slots()
-        frame = self._frame_key(state, slots)
+        overlay = self._overlay
+        frame = self._frame_key(state, slots, overlay)
         if frame != self._model:
             # A change in the lighting model counts as activity and wakes the
             # pad, exactly as it does for the vendor app (§4).
@@ -496,7 +534,7 @@ class MicroLedsRenderer(Renderer):
             return
 
         if frame != self._frame:
-            if self._send(self.messages_for(state, slots=slots)):
+            if self._send(self.messages_for(state, slots=slots, overlay=overlay)):
                 self._frame = frame
             return
 
@@ -519,6 +557,35 @@ class MicroLedsRenderer(Renderer):
     def dimmed(self) -> bool:
         """Whether auto-dim has blanked the pad."""
         return self._dimmed
+
+    @property
+    def overlay(self) -> Optional[ActivityLight]:
+        """The layer currently over the state lighting, if any."""
+        return self._overlay
+
+    def set_overlay(self, overlay: Optional[ActivityLight]) -> bool:
+        """Put a binding's light over the state lighting, or take it away.
+
+        Records and returns; it deliberately **does not write**. The pad is
+        painted from one place - :meth:`render` - and that is what guarantees
+        the layer and the state underneath it are always one consistent frame,
+        that letting go shows the state as it is *now*, and that no code path
+        exists which could leave a colour behind because it failed halfway.
+
+        The lag that buys is one render tick (``freemicro run --interval``,
+        default 0.25 s), and it is the right trade twice over: this is called
+        from the thread reading key events on the same channel lighting goes
+        down, and the vendor app defers its own lighting writes for 100 ms after
+        the last input for exactly that reason (``docs/FACTORY-DEFAULTS.md``
+        §3).
+
+        Idempotent. Returns whether anything changed, so a caller can log a
+        transition without tracking one itself.
+        """
+        if overlay == self._overlay:
+            return False
+        self._overlay = overlay
+        return True
 
     def note_activity(self) -> None:
         """The user did something. Wake the pad if auto-dim put it out.
@@ -564,6 +631,13 @@ class MicroLedsRenderer(Renderer):
         lighting = self.lighting
         if not lighting.auto_dim_enabled:
             return False
+        if self._overlay is not None:
+            # A key is being held *right now*. Blanking the pad mid-hold would
+            # be the pad going dark while you are still talking into it, and
+            # holding a key is the least ambiguous activity there is - the
+            # factory's own wake rule is "any HID event" (§4) and this is one
+            # that has not finished yet.
+            return False
         if now - self._activity_at < lighting.auto_dim_seconds:
             return False
         if not lighting.auto_dim_alerts and self._asks_for_you(state, slots):
@@ -589,12 +663,20 @@ class MicroLedsRenderer(Renderer):
 
     @staticmethod
     def _frame_key(
-        state: AgentState, slots: Optional[Sequence[AgentSlot]]
+        state: AgentState,
+        slots: Optional[Sequence[AgentSlot]],
+        overlay: Optional[ActivityLight] = None,
     ) -> Tuple[Any, ...]:
-        """Everything that affects what the pad shows, and nothing else."""
-        if slots is None:
-            return (state, None)
-        return (state, tuple((s.path, s.state) for s in slots))
+        """Everything that affects what the pad shows, and nothing else.
+
+        The overlay is part of it, which is what makes the layer go up and come
+        down through the ordinary dedupe rather than around it - and what makes
+        a layer appearing count as activity and wake a dimmed pad.
+        """
+        slot_key = None if slots is None else tuple(
+            (s.path, s.state) for s in slots
+        )
+        return (state, slot_key, overlay)
 
     def close(self) -> None:
         device, self._device = self._device, None
@@ -646,35 +728,73 @@ class MicroLedsRenderer(Renderer):
         state: AgentState,
         light: Optional[StateLight] = None,
         slots: Optional[Sequence[AgentSlot]] = None,
+        overlay: Optional[ActivityLight] = None,
     ) -> List[dict]:
         """Every protocol message this state should produce, in send order.
 
         ``light`` overrides the configured look for this call only, which is how
-        ``freemicro lights --color`` experiments without touching the config.
+        ``freemicro lights --color`` experiments without touching the config. It
+        also means "one look, on the zones I drive", so an explicit ``light``
+        never drags in the zones only an activity layer would claim - a preview
+        must show what it was asked to show and nothing else.
 
         ``slots`` colours the six Agent Keys individually. ``None`` - the
         default, and what an explicit ``light`` implies - mirrors ``state``
         across all six, which is the ``mirror`` policy and the behaviour of
         every caller that has one look to show rather than six.
-        """
-        light = light or self.light_for(state)
-        lighting = self.lighting
-        messages: List[dict] = []
 
-        if lighting.drives_backlight or lighting.drives_underglow:
-            messages.append(self._zone_message(light))
-        if lighting.drives_agent_keys:
-            if slots is None:
-                messages.append(
-                    all_agent_keys(
-                        light.color, light.effect, light.brightness, light.speed
-                    )
-                )
-            else:
+        ``overlay`` is the layer a live binding has put over all of it. It wins
+        on the zones it names and changes nothing anywhere else.
+        """
+        base = light or self.light_for(state)
+        lighting = self.lighting
+        extra = () if light is not None else self._activity_zones()
+
+        def look(zone: str) -> Optional[StateLight]:
+            """What this zone shows, or ``None`` if we do not drive it."""
+            if overlay is not None and zone in overlay.zones:
+                return overlay
+            if zone in lighting.zones:
+                return base
+            if zone in extra:
+                # A zone only the layer ever claims. Dark is not a decision
+                # about this frame, it is what "we drive this zone and nothing
+                # is on it" looks like - and it is what the factory sends to the
+                # underglow whenever nothing is happening (§1b).
+                return _DARK
+            return None
+
+        messages: List[dict] = []
+        keys, ambient = look(ZONE_BACKLIGHT), look(ZONE_UNDERGLOW)
+        if keys is not None or ambient is not None:
+            messages.append(self._zone_message(keys, ambient))
+        agent = look(ZONE_AGENT_KEYS)
+        if agent is not None:
+            if agent is base and slots is not None:
                 messages.append(
                     thstatus_message(self._slot_entry(slot) for slot in slots)
                 )
+            else:
+                messages.append(
+                    all_agent_keys(
+                        agent.color, agent.effect, agent.brightness, agent.speed
+                    )
+                )
         return messages
+
+    def _activity_zones(self) -> Tuple[str, ...]:
+        """Zones some binding's light can claim but the state lighting cannot.
+
+        Read from the config rather than remembered from what we last sent: a
+        fixed answer is what lets every frame paint every zone we drive, so
+        taking a layer down is an ordinary frame and not an undo.
+        """
+        try:
+            claimed = self.config.activity_zones
+        except Exception:  # noqa: BLE001 - a config oddity must not go dark
+            return ()
+        zones = self.lighting.zones
+        return tuple(zone for zone in claimed if zone not in zones)
 
     def _slot_entry(self, slot: AgentSlot) -> dict:
         """One ``v.oai.thstatus`` entry for one Agent Key.
@@ -694,9 +814,17 @@ class MicroLedsRenderer(Renderer):
         )
 
     def _zone_message(
-        self, light: StateLight, lighting: Optional[LightingConfig] = None
+        self,
+        keys: Optional[StateLight],
+        ambient: Optional[StateLight],
+        lighting: Optional[LightingConfig] = None,
     ) -> dict:
         """Build the backlight/underglow message for the configured method.
+
+        The two sides are passed separately because they can genuinely differ:
+        an activity layer may own the underglow while agent state owns the
+        backlight. ``None`` means "we are not driving that side", which is not
+        the same as "that side is off" and must not be sent as one.
 
         ``v.oai.rgbcfg`` is the default because it is the one that works:
         verified by eye on firmware v0.4.1 driving the underglow, and the same
@@ -706,30 +834,51 @@ class MicroLedsRenderer(Renderer):
         """
         lighting = lighting if lighting is not None else self.lighting
         if lighting.method == "rgbcfg":
-            side = rgbcfg_side(
-                light.color, light.effect, light.brightness, light.speed
-            )
             return rgbcfg_message(
-                keys=side if lighting.drives_backlight else None,
-                ambient=side if lighting.drives_underglow else None,
+                keys=None if keys is None else rgbcfg_side(
+                    keys.color, keys.effect, keys.brightness, keys.speed
+                ),
+                ambient=None if ambient is None else rgbcfg_side(
+                    ambient.color, ambient.effect, ambient.brightness,
+                    ambient.speed,
+                ),
             )
-        zone = light.to_zone()
         self._request_id += 1
         return preview_message(
-            backlight=zone if lighting.drives_backlight else None,
-            underglow=zone if lighting.drives_underglow else None,
+            backlight=None if keys is None else keys.to_zone(),
+            underglow=None if ambient is None else ambient.to_zone(),
             request_id=self._request_id,
         )
 
     def _look_messages(
         self, light: StateLight, lighting: Optional[LightingConfig] = None
     ) -> List[dict]:
-        """One look across every zone we drive. The whole pad, one colour."""
+        """One look across every zone we drive. The whole pad, one colour.
+
+        "Every zone we drive" includes the ones only an activity layer ever
+        claims. This builds the blank frame and the exit frame, and a zone that
+        can be lit by a held key but never blanked by auto-dim or on the way out
+        is exactly the stranded colour this feature must not create.
+        """
         lighting = lighting if lighting is not None else self.lighting
+        extra = self._activity_zones()
+        drives = {
+            ZONE_BACKLIGHT: lighting.drives_backlight or ZONE_BACKLIGHT in extra,
+            ZONE_UNDERGLOW: lighting.drives_underglow or ZONE_UNDERGLOW in extra,
+            ZONE_AGENT_KEYS: (
+                lighting.drives_agent_keys or ZONE_AGENT_KEYS in extra
+            ),
+        }
         messages: List[dict] = []
-        if lighting.drives_backlight or lighting.drives_underglow:
-            messages.append(self._zone_message(light, lighting))
-        if lighting.drives_agent_keys:
+        if drives[ZONE_BACKLIGHT] or drives[ZONE_UNDERGLOW]:
+            messages.append(
+                self._zone_message(
+                    light if drives[ZONE_BACKLIGHT] else None,
+                    light if drives[ZONE_UNDERGLOW] else None,
+                    lighting,
+                )
+            )
+        if drives[ZONE_AGENT_KEYS]:
             messages.append(
                 all_agent_keys(
                     light.color, light.effect, light.brightness, light.speed
