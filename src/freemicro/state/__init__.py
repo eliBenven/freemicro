@@ -11,7 +11,33 @@ Everything downstream (renderers, the CLI) consumes the resolved state and
 never has to know about hooks.
 """
 
-from freemicro.state.engine import AgentState, SessionState, StateStore
-from freemicro.state.hooks import classify
+from freemicro.state.engine import (
+    DEFAULT_DECAY,
+    AgentState,
+    DecayPolicy,
+    ProcessLiveness,
+    SessionSignals,
+    SessionState,
+    StateStore,
+    decay_of,
+    default_liveness,
+    default_store,
+    pid_alive,
+)
+from freemicro.state.hooks import classify, read_signals
 
-__all__ = ["AgentState", "SessionState", "StateStore", "classify"]
+__all__ = [
+    "DEFAULT_DECAY",
+    "AgentState",
+    "DecayPolicy",
+    "ProcessLiveness",
+    "SessionSignals",
+    "SessionState",
+    "StateStore",
+    "classify",
+    "decay_of",
+    "default_liveness",
+    "default_store",
+    "pid_alive",
+    "read_signals",
+]
