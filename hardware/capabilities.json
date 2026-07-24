@@ -1,24 +1,207 @@
 {
-  "_comment": "Crowdsourced hardware-capability database. One entry per firmware revision of a pad, keyed by VID:PID. Submit yours via the Hardware Report issue template (paste `freemicro detect --json`). Fields marked null are UNVERIFIED and awaiting a physical probe (Milestone 0).",
-  "schemaVersion": 1,
+  "_comment": "Crowdsourced hardware-capability database. One entry per firmware revision of a pad, keyed by VID:PID. Submit yours via the Hardware Report issue template (paste `freemicro detect --json`). Fields marked null are UNVERIFIED. The full wire protocol lives in docs/PROTOCOL.md.",
+  "schemaVersion": 2,
   "devices": [
     {
-      "name": "OpenAI Codex Micro (Work Louder Creator Micro 2)",
-      "aliases": ["Codex Micro", "CM2"],
-      "vendorId": null,
-      "productId": null,
-      "firmwareRevision": "shipping-2026-07",
-      "hasRawHid": null,
+      "name": "OpenAI Codex Micro (Work Louder)",
+      "aliases": [
+        "Codex Micro",
+        "CM2"
+      ],
+      "vendorId": "0x303A",
+      "productId": "0x8360",
+      "firmwareRevision": "v0.4.1 (shipping 2026-07)",
+      "mcuFamily": "ESP32 (Espressif VID; not RP2040)",
+      "hasRawHid": false,
       "rawUsagePage": null,
-      "viaWritable": null,
-      "ledsPerKeyAddressable": null,
-      "agentKeysDrivable": null,
+      "vendorUsagePage": "0xFF00",
+      "viaWritable": false,
+      "qmkFlashable": false,
+      "inputsReadable": true,
+      "ledsDrivable": true,
+      "ledsPerKeyAddressable": true,
+      "agentKeysDrivable": true,
       "bootloaderOpen": null,
-      "requiresChatgptAppQuit": null,
-      "recommendedRenderer": null,
-      "notes": "UNVERIFIED. The entire LED path hinges on these answers (SPEC §4). Launch coverage conflicts: some report VIA-capable real-time remap; Work Louder is quoted saying CM2 uses proprietary Input, not QMK/VIA. Run `freemicro detect --json` on the physical unit and open a Hardware Report.",
-      "reportedBy": [],
-      "lastVerified": null
+      "requiresChatgptAppQuit": true,
+      "recommendedRenderer": "micro-leds",
+      "macosUserlandOpenable": true,
+      "macosAccessMethod": "IOKit IOHIDDeviceOpen via IOServiceGetMatchingServices('IOHIDDevice'); requires Input Monitoring. hidapi open_path() ALWAYS FAILS on macOS because hidapi models each HID top-level collection as a separate openable path while macOS vends ONE IOHIDDevice whose primary usage is the keyboard collection and which contains 0xFF00 as a secondary collection.",
+      "protocol": {
+        "doc": "docs/PROTOCOL.md",
+        "usagePage": "0xFF00",
+        "reportId": 6,
+        "inputReportBytes": 63,
+        "outputReportBytes": 63,
+        "framing": "USB: [0x02][len][utf-8 JSON] in 63 bytes. BLE: [0x06][0x02][len][utf-8 JSON] in 64 bytes. Messages CRLF-terminated; long messages span multiple reports.",
+        "encoding": "JSON-RPC; compact {m,p,id} and standard {jsonrpc,method,params,id} both accepted",
+        "unknownMethodResponse": "{\"error\":{\"code\":404,\"message\":\"Method not found\"}}",
+        "writeReturnCodesAreMeaningless": "A wrongly framed write still returns kIOReturnSuccess and is silently discarded. The ONLY reliable health check is a device.status round trip."
+      },
+      "inputEvents": {
+        "keys": {
+          "method": "v.oai.hid",
+          "params": "{k, act, ag} - k=key id, act 1=down/0=up, ag=agent index",
+          "keyIds": [
+            "AG00",
+            "AG01",
+            "AG02",
+            "AG03",
+            "AG04",
+            "AG05",
+            "ACT06",
+            "ACT07",
+            "ACT08",
+            "ACT09",
+            "ACT10",
+            "ACT11",
+            "ACT12",
+            "ENC_CLK",
+            "ENC_CW",
+            "ENC_CC"
+          ],
+          "note": "The keys emit NO ordinary keyboard scancodes. Nothing types unless software listens on this channel.",
+          "encoderRotation": "ENC_CW / ENC_CC arrive through v.oai.hid like the keys, one event per detent. Their 'act' value is NOT reliably 1 - fire ticks on any act value; they are momentary and have no matching release, so nothing can double-trigger.",
+          "physicalLayout": "ACT06=LAB, ACT07=PR, ACT08=NAV, ACT09=PLAY, ACT10=TERM, ACT11=MIC, ACT12=spare (one unit, confirmed)"
+        },
+        "joystick": {
+          "method": "v.oai.rad",
+          "params": "{a, d} - a=angle, d=distance, both normalized 0-1",
+          "note": "Analogue thumbstick, definitively - it sweeps angle and returns to exactly {a:0,d:0} on release, which an encoder cannot do."
+        }
+      },
+      "lighting": {
+        "liveMethod": "v.oai.rgbcfg",
+        "liveZones": [
+          "ambient (chassis underglow)",
+          "keys (under the keycaps)"
+        ],
+        "liveFields": "minimized names: e=effect, b=brightness 0-1, s=speed 0-1, m=magic (UNVERIFIED), c=packed 0xRRGGBB int",
+        "liveNotPersisted": true,
+        "liveAcceptsId": true,
+        "liveReply": "{\"result\": null}",
+        "agentKeyMethod": "v.oai.thstatus",
+        "agentKeyParams": "ARRAY of {id, c, b, e, s, sk?, sa?} - id 0-5, one entry per Agent Key; verified visually setting all six independently",
+        "storedConfigNote": "RESOLVED 2026-07-23: v.oai.rgbcfg is the LIVE path and visibly drives the underglow and key backlight. The earlier 'rgbcfg does nothing' finding was a false negative from malformed BLE writes made before the 64-byte report-id-prefixed framing was discovered. The vendor app uses rgbcfg + thstatus and never calls lights.preview.",
+        "effects": {
+          "0": "off",
+          "1": "solid",
+          "2": "snake",
+          "3": "rainbow",
+          "4": "breath (firmware idle default)",
+          "5": "gradient",
+          "6": "shallowBreath"
+        },
+        "notificationsTakeNoId": "Every v.oai.* method is a notification - sending one WITH an id returns 404.",
+        "replacesPreviousState": "Each lighting call replaces the previous one, so a fast sequence looks like only its final frame to a human observer. Hold each colour 1-2s when testing by eye.",
+        "verifiedTransports": [
+          "USB",
+          "Bluetooth Low Energy"
+        ],
+        "previewMethodNote": "lights.preview EXISTS in the firmware method table and returns {'result': null}, but produces NO visible change on firmware v0.4.1 - neither zone, over USB or Bluetooth, with the vendor app quit. Verified 2026-07-23. Do not use it."
+      },
+      "baseMethods": [
+        "sys.version",
+        "sys.bootloader (WARNING: reboots into DFU and disconnects the device - never call during normal operation)",
+        "sys.selftest",
+        "device.status",
+        "lights.preview",
+        "ui.active_screen",
+        "ui.home_accent_color",
+        "mp.write_info",
+        "mp.write_artwork",
+        "fs.list",
+        "fs.read",
+        "fs.write",
+        "fs.writebin",
+        "fs.readbin",
+        "fs.delete",
+        "host.focused_app",
+        "wlsdk.<name>"
+      ],
+      "hidInterfaces": [
+        {
+          "usagePage": "0x0001",
+          "usage": 6,
+          "note": "Keyboard"
+        },
+        {
+          "usagePage": "0x000C",
+          "usage": 1,
+          "note": "Consumer Control"
+        },
+        {
+          "usagePage": "0x0001",
+          "usage": 2,
+          "note": "Mouse"
+        },
+        {
+          "usagePage": "0x0001",
+          "usage": 1,
+          "note": "Pointer"
+        },
+        {
+          "usagePage": "0x0001",
+          "usage": 5,
+          "note": "Game Pad"
+        },
+        {
+          "usagePage": "0xFF00",
+          "usage": 1,
+          "note": "Vendor-defined - the JSON-RPC channel carrying key events AND lighting"
+        }
+      ],
+      "notes": "VERIFIED on a shipping unit, 2026-07-23, macOS. (1) Enumerates as VID 0x303A (Espressif) / PID 0x8360, mfr 'Work Louder', product 'Codex Micro'. The MCU is ESP32-family, NOT the RP2040 assumed for the Creator Micro 2 - so Path C (reflash the open-source RP2040-only work_louder/micro QMK target) is INVALID for this silicon. (2) No 0xFF60 VIA/raw-HID channel exists -> Path A (VIA) is BLOCKED. (3) The 0xFF00 vendor channel speaks JSON-RPC, not an opaque binary protocol - INPUTS and LEDS are both solved through it, with no USB capture required. Report descriptor captured (275 bytes, hardware/probes/codex-report-descriptor.bin): usage page 0xFF00, usage 1, Report ID 6, 63-byte Input AND Output reports. (4) An earlier write test concluded 'writes are accepted but every payload is ignored' - accurate but misleading: the framing was right, the payload simply was not JSON the firmware recognised. (5) The unit exhibited severe USB intermittency (enumerating for seconds then dropping), unrelated to writes - it began before any write was issued. (6) Everything here is one unit on one firmware revision; a firmware update could change any of it.",
+      "openQuestions": [
+        "Does v.oai.rgbcfg actually drive the lights? (see lighting.storedConfigNote)",
+        "The literal 'act' value on encoder rotation events",
+        "Linux / Windows host access to the 0xFF00 channel (should be reachable; unimplemented)",
+        "The 'magic' lighting field's purpose",
+        "Whether a synthetic fn modifier triggers third-party dictation apps",
+        "Whether the bootloader accepts third-party firmware"
+      ],
+      "reportedBy": [
+        "local probe (macOS, hidapi + IOKit, USB and Bluetooth)"
+      ],
+      "lastVerified": "2026-07-23",
+      "transports": {
+        "usb": {
+          "verified": true,
+          "writeFraming": "[0x02][len][json], 63 bytes, reportID=6, Output"
+        },
+        "bluetoothLE": {
+          "verified": true,
+          "writeFraming": "[0x06][0x02][len][json], 64 bytes, reportID=6, Output - the report id is REPEATED as buffer[0]",
+          "featureReports": "rejected with 0xE00002F0",
+          "productString": "Codex Micro #1",
+          "hidCollections": 4,
+          "reportDescriptorBytes": 216,
+          "note": "Fully capable: input, lighting and RPC all verified wirelessly with the cable unplugged. Match on VID/PID only - the product string and collection count differ from USB."
+        },
+        "note": "Detect via the IOHIDDevice 'Transport' registry property ('USB' vs 'Bluetooth Low Energy') and select the write framing from it. Nothing else is conditioned on transport."
+      },
+      "factoryDefaults": {
+        "doc": "docs/FACTORY-DEFAULTS.md",
+        "statusColors": {
+          "idle": 16777215,
+          "working": 3166206,
+          "unread": 65356,
+          "awaiting-approval": 16739584,
+          "awaiting-response": 16739584,
+          "error": 16711731,
+          "off": 0
+        },
+        "voiceColors": {
+          "recording": 3050327,
+          "processing": 16777215,
+          "completed": 16777215
+        },
+        "notes": "Green means UNREAD, not completed - it clears when the user looks at the thread. The key backlight is dark almost always. Auto-dim after 180s means FULLY dark, not reduced brightness. Battery and transport have no effect on lighting."
+      },
+      "safety": [
+        "NEVER call sys.bootloader in normal operation - it reboots into DFU and disconnects the device.",
+        "fs.write / fs.delete have no documented restore path on this silicon; out of scope.",
+        "The IOKit input-report callback plus a CFRunLoop segfaults if the ctypes callback is collected while the pad drops mid-call. Hold a strong reference, never raise inside the callback, and prefer callback-free fire-and-forget writes for send-only paths."
+      ]
     }
   ]
 }

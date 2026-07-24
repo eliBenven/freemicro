@@ -1,0 +1,261 @@
+{
+  "hidapi_available": true,
+  "interfaces": [
+    {
+      "vendor_id": 1452,
+      "product_id": 0,
+      "usage_page": 65280,
+      "usage": 15,
+      "interface_number": -1,
+      "product_string": "Keyboard Backlight",
+      "manufacturer_string": ""
+    },
+    {
+      "vendor_id": 1452,
+      "product_id": 33028,
+      "usage_page": 65280,
+      "usage": 9,
+      "interface_number": -1,
+      "product_string": "",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 65280,
+      "usage": 13,
+      "interface_number": -1,
+      "product_string": "Apple Internal Keyboard / Trackpad",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 65280,
+      "usage": 72,
+      "interface_number": -1,
+      "product_string": "BTM",
+      "manufacturer_string": "APPL"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 65280,
+      "usage": 11,
+      "interface_number": -1,
+      "product_string": "Apple Internal Keyboard / Trackpad",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 65280,
+      "usage": 4,
+      "interface_number": -1,
+      "product_string": "",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 12346,
+      "product_id": 33632,
+      "usage_page": 1,
+      "usage": 6,
+      "interface_number": 0,
+      "product_string": "Codex Micro",
+      "manufacturer_string": "Work Louder"
+    },
+    {
+      "vendor_id": 12346,
+      "product_id": 33632,
+      "usage_page": 12,
+      "usage": 1,
+      "interface_number": 0,
+      "product_string": "Codex Micro",
+      "manufacturer_string": "Work Louder"
+    },
+    {
+      "vendor_id": 12346,
+      "product_id": 33632,
+      "usage_page": 1,
+      "usage": 2,
+      "interface_number": 0,
+      "product_string": "Codex Micro",
+      "manufacturer_string": "Work Louder"
+    },
+    {
+      "vendor_id": 12346,
+      "product_id": 33632,
+      "usage_page": 1,
+      "usage": 1,
+      "interface_number": 0,
+      "product_string": "Codex Micro",
+      "manufacturer_string": "Work Louder"
+    },
+    {
+      "vendor_id": 12346,
+      "product_id": 33632,
+      "usage_page": 1,
+      "usage": 5,
+      "interface_number": 0,
+      "product_string": "Codex Micro",
+      "manufacturer_string": "Work Louder"
+    },
+    {
+      "vendor_id": 12346,
+      "product_id": 33632,
+      "usage_page": 65280,
+      "usage": 1,
+      "interface_number": 0,
+      "product_string": "Codex Micro",
+      "manufacturer_string": "Work Louder"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 65292,
+      "usage": 1,
+      "interface_number": -1,
+      "product_string": "",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 65280,
+      "usage": 95,
+      "interface_number": -1,
+      "product_string": "Apple Internal Keyboard / Trackpad",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 65292,
+      "usage": 5,
+      "interface_number": -1,
+      "product_string": "",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 65280,
+      "usage": 3,
+      "interface_number": -1,
+      "product_string": "Apple Internal Keyboard / Trackpad",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 65280,
+      "usage": 255,
+      "interface_number": -1,
+      "product_string": "",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 1452,
+      "product_id": 33028,
+      "usage_page": 65280,
+      "usage": 5,
+      "interface_number": -1,
+      "product_string": "",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 1,
+      "usage": 2,
+      "interface_number": -1,
+      "product_string": "Apple Internal Keyboard / Trackpad",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 1,
+      "usage": 1,
+      "interface_number": -1,
+      "product_string": "Apple Internal Keyboard / Trackpad",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 13,
+      "usage": 5,
+      "interface_number": -1,
+      "product_string": "Apple Internal Keyboard / Trackpad",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 65280,
+      "usage": 12,
+      "interface_number": -1,
+      "product_string": "Apple Internal Keyboard / Trackpad",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 1452,
+      "product_id": 33028,
+      "usage_page": 32,
+      "usage": 138,
+      "interface_number": -1,
+      "product_string": "",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 1,
+      "usage": 6,
+      "interface_number": -1,
+      "product_string": "Apple Internal Keyboard / Trackpad",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 12,
+      "usage": 1,
+      "interface_number": -1,
+      "product_string": "Apple Internal Keyboard / Trackpad",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 65280,
+      "usage": 6,
+      "interface_number": -1,
+      "product_string": "Apple Internal Keyboard / Trackpad",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 0,
+      "product_id": 0,
+      "usage_page": 12,
+      "usage": 1,
+      "interface_number": -1,
+      "product_string": "Headset",
+      "manufacturer_string": "Apple"
+    },
+    {
+      "vendor_id": 1452,
+      "product_id": 33028,
+      "usage_page": 65280,
+      "usage": 3,
+      "interface_number": -1,
+      "product_string": "",
+      "manufacturer_string": "Apple"
+    }
+  ],
+  "notes": [
+    "No 0xFF60 raw-HID interface found. The pad may not expose a writable VIA channel; fall back to busylight or screen renderers."
+  ],
+  "has_raw_channel": false
+}
