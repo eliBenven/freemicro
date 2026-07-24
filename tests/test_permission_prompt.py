@@ -572,7 +572,16 @@ def test_describe_never_raises_even_with_no_store(store_of):
 # The shipped default
 # ---------------------------------------------------------------------------
 
-def test_the_default_puts_approve_and_reject_on_the_caps_that_mean_them():
+def test_the_default_targets_approve_but_leaves_reject_a_plain_escape():
+    """APPR must target the asking session; REJ is deliberately a plain Escape.
+
+    Approving is dangerous if misdirected - a blind yes into the wrong window
+    could authorise a different session's tool call - so it stays the smart,
+    session-targeted ``answer_permission``. Rejecting is not: Escape declines a
+    prompt (Esc = No) and is safe to send anywhere, and it also interrupts
+    Claude and clears the input, which is worth far more than a gated decline.
+    So REJ is a plain ``key: escape``, not the mirror of APPR.
+    """
     pad = load_default()
     approve = pad.bindings["ACT07"]
     reject = pad.bindings["ACT08"]
@@ -581,8 +590,8 @@ def test_the_default_puts_approve_and_reject_on_the_caps_that_mean_them():
     assert approve.params["long_press"] == "always", (
         "the owner asked for 'yes, and don't ask again' on a hold of the yes key"
     )
-    assert reject.kind == ANSWER_PERMISSION
-    assert reject.params["answer"] == "reject"
+    assert reject.kind == "key"
+    assert reject.params["key"] == "escape"
 
 
 def test_the_default_never_puts_words_in_the_agents_mouth():

@@ -143,13 +143,19 @@
       ]
     },
     "ACT08": {
-      "action": "answer_permission",
-      "answer": "reject",
-      "label": "REJ - decline",
+      "action": "key",
+      "key": "escape",
+      "label": "REJ - interrupt / cancel",
       "comment": [
-        "The other half of ACT07, and the REJ cap's factory command",
-        "(approval.decline). Sends Escape into the asking session's tab, which",
-        "is how that prompt is declined. Same rule: no prompt, no keystroke."
+        "Escape, on the REJ (x-circle) cap. It interrupts Claude Code while it",
+        "is working, clears the input line while you type, and declines a",
+        "permission prompt (Esc = No) - so it covers the REJ cap's decline",
+        "meaning and does much more. Unlike APPR it is a plain keystroke, not",
+        "answer_permission: approving must target the asking session because a",
+        "blind yes is dangerous, but Escape is safe to send anywhere, and being",
+        "able to interrupt any time is worth far more than a gated decline.",
+        "Prefer the targeted decline? {\"action\": \"answer_permission\",",
+        "\"answer\": \"reject\"}."
       ]
     },
     "ACT09": {
