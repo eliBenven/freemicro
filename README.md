@@ -76,7 +76,7 @@ Two commands. The second one asks before it changes anything and tells you
 exactly what to click.
 
 ```sh
-pipx install git+https://github.com/eliBenven/freemicro    # not on PyPI yet
+pipx install freemicro
 freemicro start
 ```
 
@@ -208,6 +208,45 @@ done, using the **exact factory colours** so it looks like the pad you bought.
 Do not want to quit the ChatGPT app? `freemicro lights --coexist` drives only the
 key backlight, the one zone that app leaves dark.
 
+## Off-pad alerts: sound and notifications (opt-in)
+
+The pad is the display, which is also its blind spot: look away and you miss it.
+So FreeMicro can also reach you **off** the pad, on the same state changes the
+LEDs light on - a short sound and a native macOS notification. Both use built-in
+macOS tools (`afplay` and `osascript`), so they add no dependency, and both are
+**off until you ask**, the same posture as the LEDs.
+
+Turn them on in `~/.freemicro/config.json`:
+
+```json
+"alerts": {
+  "sound": {"done": "Glass", "waiting": "Ping", "error": "Basso"},
+  "notify": ["waiting", "error"]
+}
+```
+
+* **`sound`** maps a state to a macOS system sound (any name from
+  `/System/Library/Sounds`, without the `.aiff`). A gentle one on `done`, a more
+  insistent one on `waiting` and `error` is the suggested set.
+* **`notify`** lists the states that post a Notification Center banner - by
+  default `waiting` and `error`, the two where you are the blocker. The banner
+  names the project when FreeMicro knows it.
+* **`debounce_seconds`** (optional, default 8) stops a flapping state from
+  machine-gunning you: the same alert will not repeat inside that window.
+
+Confirm it works - and trigger the one-time macOS notification permission
+prompt - with:
+
+```sh
+freemicro alerts            # show what is configured (or that it is off)
+freemicro alerts --test     # fire each sound and banner so you can hear/see them
+```
+
+Alerts fire from `freemicro run` and from the background daemon alike, so they
+reach you even with no terminal open. Nothing here ever blocks the pad: each
+sound and banner is a fire-and-forget subprocess. See
+[`docs/ALERTS.md`](docs/ALERTS.md) for the full reference.
+
 ## Wired or wireless, both work
 
 The pad has a battery, and **everything works untethered**: keys, dial,
@@ -303,6 +342,7 @@ press, so FreeMicro can hold the key down for exactly as long as you do.
 | `freemicro selftest` | Proves the whole loop with no agent running: fires a synthetic session through the exact command in your Claude settings and checks the state *and* the LED messages for every state. `--json` for CI. |
 | `freemicro daemon` | `install` / `uninstall` / `status` / `logs` for the LaunchAgent that keeps FreeMicro running at login. |
 | `freemicro lights` | LEDs. `--enable` / `--disable` to opt in or out; `--coexist`, `--cycle`, `--color`, `--effect` to experiment. |
+| `freemicro alerts` | Off-pad sound and notifications (opt-in, off by default). `--test` fires each one so you can confirm they work and grant the notification permission. |
 | `freemicro keys` | Just the key bridge. `--list`, `--init`, `--dry-run`, `--config`. |
 | `freemicro config` | Where your config lives, what is in effect, `--edit` to open it. |
 | `freemicro install` | Add FreeMicro's hooks to Claude Code's settings (idempotent, self-repairing, `--uninstall` to remove). Runs `selftest` afterwards unless you pass `--no-verify`. |
