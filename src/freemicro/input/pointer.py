@@ -19,8 +19,18 @@ vector until something replaces it.
 **A stale sample is a stop, not a hold.** The flip side of integrating the last
 known vector is that a dropped Bluetooth packet would otherwise leave the cursor
 sliding across the desk forever. Any sample older than
-:data:`DEFAULT_STALE_SECONDS` is treated as zero velocity, so a disconnect, a
-sleep or a lost packet all fail safe within a quarter second.
+:data:`DEFAULT_STALE_SECONDS` is treated as zero velocity, so a real disconnect
+fails safe.
+
+The catch, measured on hardware: **the pad is change-based, not continuous.**
+While the stick is swept it streams samples every 15-30 ms, but while it is held
+*steady* it goes quiet - a captured hold showed a 2.1 s gap with the stick still
+deflected. So the stale window must be well above that quiet gap, or holding a
+direction reads as a disconnect and the cursor stops mid-hold (it did, at the
+old 0.25 s). Release does not depend on this window at all: the pad sends an
+explicit ``{a:0, d:0}`` on release, which the deadzone stops on immediately. The
+window is purely the backstop for a genuine drop where even that release is
+lost.
 
 **Non-linear response.** Linear deflection feels twitchy: usable speed at full
 tilt means no precision at all near centre. The curve is
@@ -64,10 +74,13 @@ from freemicro.padconfig import JoystickConfig
 
 #: How long a sample stays trustworthy. Past this the pointer stops dead.
 #:
-#: A quarter second is long enough to ride out a hiccup on a channel that also
-#: carries key events and lighting writes, and short enough that a real
-#: disconnect never reads as "the user is still holding the stick".
-DEFAULT_STALE_SECONDS = 0.25
+#: Measured: the pad falls silent while a direction is held steady (a 2.1 s gap
+#: was captured with the stick still deflected), so this must sit well above
+#: that or a held direction stops the cursor mid-move - which is exactly what
+#: 0.25 s did. 4 s clears the observed quiet gap with margin and still stops a
+#: genuine disconnect within a few seconds. Release is instant regardless: it
+#: arrives as an explicit d=0 the deadzone catches, not as silence.
+DEFAULT_STALE_SECONDS = 4.0
 
 #: The largest slice of time one tick may integrate, in seconds.
 #:

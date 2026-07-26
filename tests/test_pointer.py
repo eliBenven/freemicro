@@ -250,11 +250,28 @@ def test_a_stale_sample_stops_the_cursor_dead():
         assert engine.tick(clock.advance(0.5)) == (0, 0)
 
 
+def test_a_held_direction_keeps_moving_through_the_pads_silent_gap():
+    """The pad goes silent while a direction is held steady.
+
+    Measured on hardware: a 2.1 s gap between samples with the stick still
+    deflected. That silence is *holding*, not stopping, and must keep the
+    cursor moving - the old 0.25 s window read it as a disconnect and froze the
+    cursor mid-hold, which is the reported bug. Only a gap past the stale window
+    (a real drop) stops it.
+    """
+    engine, clock = _engine()
+    engine.update(0.0, 1.0, clock.now)   # push and hold a direction
+    engine.tick(clock.now)               # baseline tick
+    # 2.1 s of total silence, the captured quiet gap: still moving, not stale.
+    assert engine.tick(clock.advance(2.1))[0] > 0
+    assert not engine.vector(clock.now).stale
+
+
 def test_a_fresh_sample_revives_a_stalled_pointer():
     engine, clock = _engine()
     engine.update(0.0, 1.0, clock.now)
     engine.tick(clock.now)
-    clock.advance(1.0)
+    clock.advance(DEFAULT_STALE_SECONDS + 0.5)       # past the window: a drop
     assert engine.tick(clock.now) == (0, 0)
     engine.update(0.0, 1.0, clock.advance(0.01))
     engine.tick(clock.now)
@@ -373,11 +390,20 @@ def test_the_loop_stops_on_the_clock_alone_when_the_pad_goes_silent():
     loop = PointerLoop(engine, lambda dx, dy: moves.append((dx, dy)),
                        tick_hz=100.0, clock=clock, sleep=clock.advance)
     engine.update(0.0, 1.0, clock.now)
-    for _ in range(200):                 # 2 s of ticks, no further samples
+
+    # Halfway into the stale window with no further samples: this is a held
+    # direction (the pad goes silent while holding), so it must still be moving.
+    for _ in range(int(DEFAULT_STALE_SECONDS * 0.5 * 100)):
         loop.step()
         loop.sleep(loop.period)
-    # Roughly a quarter second of motion, then silence - not two seconds of it.
-    assert 20 <= len(moves) <= 30
+    assert moves, "cursor stopped inside the stale window - the held-gap bug"
+    assert not engine.vector(clock.now).stale
+
+    # Well past the window, still no sample: now it is a real disconnect, and
+    # the safety stop fires from the clock alone - no sample needed to notice.
+    for _ in range(int((DEFAULT_STALE_SECONDS + 1.0) * 100)):
+        loop.step()
+        loop.sleep(loop.period)
     assert engine.vector(clock.now).stale
 
 
@@ -656,5 +682,5 @@ def test_the_dry_run_line_ignores_messages_that_are_not_the_stick():
 def test_a_stale_readout_says_so():
     bridge, backend, clock = _bridge()
     bridge.handle(stick(0.0, 1.0))
-    clock.advance(1.0)
+    clock.advance(DEFAULT_STALE_SECONDS + 0.5)   # past the window: a real drop
     assert "stale" in bridge.pointer.vector().describe()
