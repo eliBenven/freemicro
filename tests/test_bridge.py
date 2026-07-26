@@ -427,6 +427,10 @@ _RUNNABLE = {
     "mouse": {"click": "left"},
     "none": {},
     "answer_permission": {},
+    # A layer trigger is a pure modal switch: it holds no real key (the bridge
+    # intercepts it before delivery), so it belongs in MODIFIER_SAFE_KINDS and
+    # never in MODIFIER_HOLDING_KINDS.
+    "layer": {"layer": "fn"},
 }
 
 

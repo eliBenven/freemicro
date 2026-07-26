@@ -61,6 +61,8 @@ from freemicro.input.actions import (
     Backend,
     double_tap_combo,
     is_latching,
+    is_layer,
+    layer_name,
     perform,
     release,
 )
@@ -305,6 +307,22 @@ class _Latch:
 
 
 @dataclass
+class _LayerState:
+    """One held layer trigger: the layer it switched on, and when it went down.
+
+    A layer trigger types nothing and holds no real key, but a layer stuck "on"
+    because its key-up was lost is the *same failure class* as a stuck hold - so
+    ``started_at`` feeds the same max-hold cap, and a repeated key-down reconciles
+    it the same way. ``action`` is kept for the release dispatch, the log, and any
+    light the trigger carries.
+    """
+
+    name: str
+    action: Action
+    started_at: float
+
+
+@dataclass
 class _Unresolved:
     """A chord-capable key that is down and has not yet decided what it is.
 
@@ -471,6 +489,12 @@ class Bridge:
         #: switched to another still sends *its* key-up - never the new app's
         #: binding, and never a stuck modifier. See :meth:`_run`.
         self._pressed: Dict[str, Action] = {}
+        #: input id -> the layer it is holding on. A layer trigger is a pure
+        #: modal switch (see :meth:`_activate_layer`); while it is down, keys the
+        #: layer names resolve to it. Shares the max-hold cap and the
+        #: repeated-key-down reconcile with physical holds, so a lost layer
+        #: key-up cannot latch the layer on forever. Empty unless a layer is held.
+        self._layers: Dict[str, _LayerState] = {}
         self.settle = SettleTimer(
             self._expire, clock=self.clock, sleep=sleep, autostart=autostart
         )
@@ -491,7 +515,7 @@ class Bridge:
         self.config = config  # via the setter: builds the chord index
         self._joystick = JoystickTracker(config.joystick)
         self.pointer = pointer if pointer is not None else Pointer(
-            config.joystick, move=self._move_pointer
+            config.joystick, move=self._move_pointer, click=self._click_pointer
         )
         #: The last stick vector we saw, for ``keys --dry-run``.
         self.last_vector: Optional[PointerVector] = None
@@ -538,6 +562,12 @@ class Bridge:
             # may have rebound or deleted the key. It holds nothing, so dropping
             # it strands nothing, and the next press rebuilds it.
             self._doubletap.clear()
+            # A layer held under the old file may name a layer the new one has
+            # renamed or deleted; like the undecided state above, it was decided
+            # against bindings that no longer exist. The key is physically down,
+            # so the next press re-establishes the truth.
+            self._layers.clear()
+        self._schedule_hold_cap()
         self.settle.schedule(None)
 
     @property
@@ -573,19 +603,54 @@ class Bridge:
         return self._frontmost
 
     def _resolve(self, input_id: str) -> Optional[Action]:
-        """The binding for ``input_id`` right now: profile override, else base.
+        """The binding for ``input_id`` right now, in strict precedence.
 
-        Both halves are plain dict lookups. When no profile is active
-        (:attr:`_overrides` empty - the overwhelmingly common case) this is
-        exactly ``self._config.action_for(input_id)`` was before profiles
-        existed, so a config without them behaves byte for byte as it did.
+        **Layer > profile > base**, and that order is the whole point of the
+        feature. A layer is a key the user is *physically holding down this
+        instant* - the most immediate expression of intent there is, exactly like
+        a keyboard Fn key - so it must win over the ambient per-app profile, which
+        is passive and automatic (it follows whatever app happens to be
+        frontmost). Base bindings are the fallback under both. A key a layer does
+        not name falls straight through to the profile-then-base resolution it
+        always had.
+
+        Every step is a plain dict lookup. When nothing is held and no profile is
+        active (the overwhelmingly common case) this is byte for byte the base
+        lookup it was before layers or profiles existed - the layer check returns
+        on an empty dict, the profile check on an empty map.
         """
+        layered = self._layer_override(input_id)
+        if layered is not None:
+            return layered
         overrides = self._overrides
         if overrides:
             override = overrides.get(input_id)
             if override is not None:
                 return override
         return self._config.action_for(input_id)
+
+    def _layer_override(self, input_id: str) -> Optional[Action]:
+        """The override an active layer gives ``input_id``, newest layer first.
+
+        ``None`` the moment no layer is held, which is the common case and costs
+        one dict test. With several layers held the most recently activated wins,
+        so stacking two Fn keys reads like a keyboard: the last one you pressed
+        is on top.
+        """
+        with self._lock:
+            if not self._layers:
+                return None
+            states = list(self._layers.values())
+        layers = self._config.layers
+        if not layers:
+            return None
+        for state in reversed(states):
+            overrides = layers.get(state.name)
+            if overrides:
+                action = overrides.get(input_id)
+                if action is not None:
+                    return action
+        return None
 
     @property
     def joystick(self) -> JoystickTracker:
@@ -637,6 +702,9 @@ class Bridge:
             # binding. Leaving stale entries here would let a key-up that
             # arrives after this replay a hold we have just let go of.
             self._pressed.clear()
+            # A layer is part of "everything the pad is holding": a disconnect or
+            # shutdown must not leave one latched on any more than a modifier.
+            self._layers.clear()
         self.hold_timer.schedule(None)
         try:
             return self.backend.release_held_keys()
@@ -664,6 +732,7 @@ class Bridge:
             self._open_chords.clear()
             self._doubletap.clear()
             self._pressed.clear()
+            self._layers.clear()
             del self._deferred[:]
         self.release_held_keys()
         self.pointer.close()
@@ -671,6 +740,20 @@ class Bridge:
     def _move_pointer(self, dx: int, dy: int) -> None:
         """The pointer loop's only route to the outside world."""
         self.backend.move_mouse(dx, dy, relative=True)
+
+    def _click_pointer(self, button: str) -> None:
+        """A joystick tap's click, serialised and guarded like every delivery.
+
+        Held behind ``_deliver`` so a tap-click and a key press can never race
+        into the backend at once, and swallowing failure the way the pointer's
+        move path does: a backend that cannot click (AppleScript) must drop the
+        click, never take down the key path from the sample thread.
+        """
+        try:
+            with self._deliver:
+                self.backend.click_mouse(button)
+        except Exception:  # noqa: BLE001 - a failed tap-click must not kill keys
+            pass
 
     # -- decoding ---------------------------------------------------------
 
@@ -804,6 +887,18 @@ class Bridge:
         another would resolve to the *new* app's binding on release, and the
         real key it pressed would never come back up.
         """
+        # A layer trigger is a pure modal switch, routed before everything else
+        # so it never touches the hold-key path, the suppression set or the
+        # _pressed replay. It types nothing and holds no real key. Release is
+        # matched by *membership* in ``_layers``, not by re-resolving, so a layer
+        # key retires the layer it turned on even if a profile change has since
+        # rebound the key - the same robustness the _pressed replay gives a hold.
+        if pressed and is_layer(action):
+            return self._activate_layer(input_id, action)
+        if not pressed:
+            released_layer = self._deactivate_layer(input_id)
+            if released_layer is not None:
+                return released_layer
         if pressed:
             if action is not None and (
                 is_latching(action) or action.kind in HOLD_KINDS
@@ -977,28 +1072,31 @@ class Bridge:
         self._emit(Dispatch(input_id=input_id, action=stale, stuck_release=True))
 
     def _schedule_hold_cap(self) -> None:
-        """Point the hold timer at the earliest hold that could time out.
+        """Point the hold timer at the earliest hold *or layer* that could expire.
 
-        ``None`` when nothing is held, which parks the timer. Cheap and called
-        on every hold register and release, so the cap always reflects the
-        oldest live hold.
+        ``None`` when nothing is held, which parks the timer. Cheap and called on
+        every hold and layer register and release, so the cap always reflects the
+        oldest live one. A held layer shares this cap with physical holds because
+        a stuck layer is the same failure class as a stuck modifier - see
+        :class:`_LayerState`.
         """
         with self._lock:
             started = list(self._hold_started.values())
+            started += [state.started_at for state in self._layers.values()]
         earliest = min(started) if started else None
         self.hold_timer.schedule(
             None if earliest is None else earliest + self.max_hold_seconds
         )
 
     def _hold_expire(self) -> None:
-        """The hold timer fired: release every hold past the cap. Timer thread.
+        """The hold timer fired: release every hold and layer past the cap.
 
-        The backstop for a lost key-up on a key nothing touches again. A hold
-        still legitimately down is cut here too - the cap cannot tell the two
-        apart - which is why it is generous (see :data:`DEFAULT_MAX_HOLD_SECONDS`)
-        and why the repeated-key-down reconcile exists to catch the common case
-        long before this. Each recovery is logged, the same shape as a latch stop
-        the timer produces.
+        The backstop for a lost key-up on a key nothing touches again. A hold or
+        layer still legitimately down is cut here too - the cap cannot tell the
+        two apart - which is why it is generous (see
+        :data:`DEFAULT_MAX_HOLD_SECONDS`) and why the repeated-key-down reconcile
+        exists to catch the common case long before this. Each recovery is logged.
+        Runs on the timer thread.
         """
         now = self.clock()
         with self._lock:
@@ -1008,10 +1106,68 @@ class Bridge:
                 if input_id in self._hold_started
                 and now - self._hold_started[input_id] >= self.max_hold_seconds
             ]
+            due_layers = [
+                (input_id, state)
+                for input_id, state in self._layers.items()
+                if now - state.started_at >= self.max_hold_seconds
+            ]
         for input_id, action in due:
             self._force_release_hold(input_id, action)
             self._emit(Dispatch(input_id=input_id, action=action, stuck_release=True))
+        for input_id, state in due_layers:
+            with self._lock:
+                self._layers.pop(input_id, None)
+            self._end_light(input_id)
+            self._emit(
+                Dispatch(input_id=input_id, action=state.action, stuck_release=True)
+            )
         self._schedule_hold_cap()
+
+    # -- layers ----------------------------------------------------------
+
+    def _activate_layer(self, input_id: str, action: Action) -> Dispatch:
+        """Turn a layer on while its trigger is held. The trigger types nothing.
+
+        A repeated key-down for a layer we already believe is on is proof its
+        previous key-up was lost - the same reconcile a stuck hold gets. The
+        stale entry is replaced (its cap clock restarts) and the recovery is
+        logged; the fresh hold then stands. Any ``light`` the trigger carries goes
+        up here, since a layer indicator is "on while held", exactly what a light
+        can honestly say.
+        """
+        name = layer_name(action)
+        now = self.clock()
+        with self._lock:
+            stale = self._layers.pop(input_id, None)
+            self._layers[input_id] = _LayerState(
+                name=name, action=action, started_at=now
+            )
+            if action.light is not None:
+                self._lit[input_id] = True
+        self._schedule_hold_cap()
+        if action.light is not None:
+            self._light(input_id, action.light)
+        if stale is not None:
+            self._emit(
+                Dispatch(input_id=input_id, action=stale.action, stuck_release=True)
+            )
+        return Dispatch(input_id=input_id, action=action)
+
+    def _deactivate_layer(self, input_id: str) -> Optional[Dispatch]:
+        """Turn a held layer off on its key-up. ``None`` if this is not a layer.
+
+        Keyed by membership, not by re-resolving the binding, so the layer a key
+        turned on is the layer its release retires - even across a profile change
+        or config edit that has since rebound the key. Returning ``None`` lets a
+        non-layer release fall through to the ordinary release path unchanged.
+        """
+        with self._lock:
+            state = self._layers.pop(input_id, None)
+        if state is None:
+            return None
+        self._end_light(input_id)
+        self._schedule_hold_cap()
+        return Dispatch(input_id=input_id, action=state.action)
 
     # -- double-tap on a physical hold -----------------------------------
 

@@ -71,7 +71,8 @@ of lines) and is ignored by the loader; `light` is
 | `shell` | `command` | `cwd`, `wait` | Runs a shell command. Fire-and-forget unless `wait: true`. |
 | `applescript` | `script` | - | Runs arbitrary AppleScript. The escape hatch. |
 | `app` | `name` | `cycle` | Focuses an app. `cycle: true` cycles its windows if it's already frontmost. |
-| `focus_session` | - | `slot`, `project`, `fallback` | Raises the terminal tab running that Agent Key's project. The default on `AG00` - `AG05`; see [`AGENT-KEYS.md`](AGENT-KEYS.md). |
+| `focus_session` | - | `slot`, `project`, `fallback`, `new_terminal`, `terminal` | Raises the terminal tab running that Agent Key's project; when the key is **empty** (no live project) opens a new terminal window instead. The default on `AG00` - `AG05`; see [`AGENT-KEYS.md`](AGENT-KEYS.md) and [below](#an-empty-agent-key-opens-a-terminal). |
+| `layer` | `layer` | - | Makes the key a layer trigger: hold it for the named layer's bindings. Types nothing itself. See [Layers](#layers-hold-a-key-for-a-second-binding-set). |
 | `mouse` | - | `x`, `y`, `absolute`, `click`, `count` | Moves the pointer and/or clicks. |
 | `none` | - | - | Explicitly unbind an input. |
 
@@ -165,6 +166,36 @@ seeing `AG00+AG01` the pad could not act until it knew `AG02` was not coming,
 which is a second settle window paid by every two-key chord. Thirteen keys
 already give seventy-eight pairs.
 
+### An empty Agent Key opens a terminal
+
+An Agent Key with no live project - an **unlit** key - used to do nothing when
+pressed. Now it opens a **new terminal window**, so a spare key is a way to start
+work rather than a dead key. A key that *does* have a live project still focuses
+that project's tab, unchanged; only the empty case is new.
+
+It opens the top-level `terminal_app` (default `"Terminal"`, the one terminal
+every Mac has). Set it once to yours:
+
+```json
+{
+  "terminal_app": "iTerm2",
+  "bindings": { "AG00": { "action": "focus_session", "label": "agent 1" } }
+}
+```
+
+Terminal and iTerm2 get a real new window through their own AppleScript; the
+common Cmd-N terminals (Ghostty, Warp, WezTerm, kitty, Alacritty, Hyper, Tabby,
+Rio, VS Code, Cursor) are activated and sent Cmd-N; anything else FreeMicro does
+not recognise is simply **activated** - the right app comes forward even if a new
+window cannot be opened for it. It only ever opens a window: no `cd`, no launching
+Claude Code, that is yours to do.
+
+**The switch.** Opening a window is visible and non-destructive, so it is **on by
+default** for empty keys. Turn it off globally with `"terminal_app": false` (every
+empty key then stays inert), or for one key with
+`{"action": "focus_session", "new_terminal": false}`. A single key can also name
+its own terminal with `"terminal": "Ghostty"`, overriding the top-level default.
+
 ### Per-app profiles: one key, different jobs per app
 
 The same key can sensibly mean different things depending on what is in front of
@@ -232,6 +263,93 @@ binding it replaces. In the web editor (`freemicro config --web`) the profiles
 live under **Advanced -> Per-app profiles**, where you add an app from a picker
 of what is installed and give any key an app-specific binding with the same
 widgets the base bindings use.
+
+### Layers: hold a key for a second binding set
+
+A layer is a keyboard **Fn key** for your pad. A binding can be a *layer
+trigger*, and while that key is physically held the keys a layer names resolve
+to that layer; on release they revert. It is what lets one physical key carry two
+jobs.
+
+```json
+{
+  "bindings": {
+    "ACT09":   {"action": "layer", "layer": "fn"},
+    "ENC_CLK": {"action": "mouse", "click": "left"}
+  },
+  "layers": {
+    "fn": {
+      "ENC_CLK": {"action": "text", "text": "/effort", "submit": true}
+    }
+  }
+}
+```
+
+Each layer is a **partial bindings map**, exactly like a profile: same action
+forms, the string shorthand included, validated the same way at load time. A
+layer overrides **only the keys it names** - everything else falls through to
+your normal resolution.
+
+**The trigger types nothing.** It is a pure modal switch: holding it switches the
+layer on and holds nothing itself.
+
+**Precedence: layer > profile > base.** When a layer is held, a key it names
+resolves to the layer, ahead of any per-app profile, ahead of the base binding. A
+key the layer does *not* name falls straight through to the profile-then-base
+resolution it always had. The order is deliberate: a key you are **physically
+holding down this instant** is the most immediate expression of intent there is -
+the same reason a keyboard's Fn wins over everything - whereas a profile is
+passive and automatic, following whatever app happens to be frontmost. If you
+hold two layer keys at once, the most recently pressed wins, which reads like a
+keyboard.
+
+**It cannot latch on forever.** A layer stuck "on" because its key-up was lost
+(a Bluetooth drop mid-hold) is the same failure class as a stuck `hold`, and it
+is recovered by the same machinery, not a second copy of it: the next press of
+the trigger reconciles it, and a 120-second max-hold cap is the backstop. A
+layer can never stay on past that.
+
+**It composes with everything else.** A `hold` reached *through* a layer still
+presses on the way down and releases on the way up - even if you let go of the
+layer key first - because the delivered action is latched on press and replayed
+on release, exactly as the profile path does. A **chord** always resolves
+globally, whatever layer is held; a layer, like a profile, overrides single keys
+only and a layer that tries to bind a chord id is refused. A layer trigger may
+carry a `light`, which is on for exactly as long as the layer is held.
+
+**The recipe: the pointer's click back, and `/effort` on demand.** By default the
+thumbstick moves the cursor and the dial press is a left click (see
+[Joystick](#joystick)). This layer keeps that, and adds a hold-for-effort mode:
+hold the fn key and the dial press opens Claude Code's `/effort` slider while the
+dial turn adjusts it.
+
+```json
+{
+  "bindings": {
+    "ACT09":   {"action": "layer", "layer": "fn"},
+    "ENC_CLK": {"action": "mouse", "click": "left"},
+    "ENC_CW":  {"action": "key", "key": "up"},
+    "ENC_CC":  {"action": "key", "key": "down"}
+  },
+  "layers": {
+    "fn": {
+      "ENC_CLK": {"action": "text", "text": "/effort", "submit": true},
+      "ENC_CW":  {"action": "key", "key": "right"},
+      "ENC_CC":  {"action": "key", "key": "left"}
+    }
+  }
+}
+```
+
+Turn the dial to adjust effort, press Enter (the CODEX key) to keep it. To drive
+effort with the **joystick** left/right instead of the dial, add `JOY_LEFT` and
+`JOY_RIGHT` arrow overrides to the `fn` layer and set
+`"joystick": {"mode": "directions"}` - in the default `pointer` mode the stick
+moves the cursor and the flicks never fire. This recipe ships documented in the
+default keymap's `_readme` but is not active; copy it in if you want it.
+
+`freemicro keys --list` prints every layer, which key triggers it, and each
+override next to the base binding it shadows.
 
 ### Adding a new action kind
 
@@ -487,7 +605,9 @@ to use that, chosen with `joystick.mode`.
   "tick_hz": 90,
   "precision_key": "",
   "precision_scale": 0.25,
-  "invert_y": false
+  "invert_y": false,
+  "tap_click": true,
+  "tap_click_button": "left"
 }
 ```
 
@@ -504,6 +624,24 @@ holding a direction steady does not stall it.
 | `tick_hz` | How often the cursor moves. Not how often the pad reports. |
 | `precision_key` | Hold this input id (e.g. `"ACT12"`) to drop to `precision_scale` of full speed for pixel work. While pointing, that key does not run its normal binding. |
 | `invert_y` | Flip up and down, if pointing comes out upside down on your unit. |
+| `tap_click` | Tap-to-click (below). On by default; `false` turns it off. |
+| `tap_click_button` | Which button a tap clicks: `left` (default), `right` or `middle`. |
+
+**Tap the stick to click.** The analogue stick has no physical button, so a
+quick **deflect-and-return** that never became real cursor movement is a left
+click - the stick becomes a full trackpad. The exact rule, and it is chosen so a
+fast intended *move* is never mistaken for a click:
+
+* the push crosses the **action deadzone** (`deadzone`, `0.6` - a deliberate
+  push, not the stick's resting slop),
+* it **returns to centre within about 200 ms** of that crossing, and
+* the cursor moved **no more than about 30 px** in total while it was out.
+
+A push you *hold*, or one that has already carried the cursor across the screen
+by the time it could return, fails the second or third test and is a move, not a
+click. Tap-to-click is on by default and only ever active in `pointer` mode; set
+`"tap_click": false` to turn it off, or `"tap_click_button"` to `right`/`middle`
+to change the button.
 
 **Tuning.** Run `freemicro keys --dry-run` and push the stick: it prints the
 live angle, distance and the resulting px/s. Push to the deflection that feels

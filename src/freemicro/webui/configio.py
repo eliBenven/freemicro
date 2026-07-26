@@ -65,7 +65,9 @@ from freemicro.padconfig import DEFAULT_CONFIG_PATH, PadConfig, PadConfigError
 BACKUP_SUFFIX = ".bak"
 
 #: Binding fields that must end up as JSON booleans, whatever the browser sent.
-_BOOL_FIELDS = frozenset({"submit", "wait", "cycle", "absolute", "latch"})
+_BOOL_FIELDS = frozenset(
+    {"submit", "wait", "cycle", "absolute", "latch", "new_terminal"}
+)
 
 #: Binding fields that must end up as JSON numbers.
 _NUMBER_FIELDS = frozenset({"x", "y", "count"})
@@ -338,6 +340,15 @@ def normalise(document: Mapping[str, Any]) -> Dict[str, Any]:
                 for binding in overrides.values():
                     _normalise_binding(binding)
 
+    # A layer's overrides are bindings too - the same shape, the same load-time
+    # range checks - so they are coerced identically to base and profile ones.
+    layers = data.get("layers")
+    if isinstance(layers, dict):
+        for overrides in layers.values():
+            if isinstance(overrides, dict):
+                for binding in overrides.values():
+                    _normalise_binding(binding)
+
     lighting = data.get("lighting")
     if isinstance(lighting, dict):
         if "enabled" in lighting:
@@ -356,6 +367,8 @@ def normalise(document: Mapping[str, Any]) -> Dict[str, Any]:
         for field in ("deadzone", "origin"):
             if field in joystick:
                 joystick[field] = _as_number(joystick[field])
+        if "tap_click" in joystick:
+            joystick["tap_click"] = _as_bool(joystick["tap_click"])
     return data
 
 
@@ -408,6 +421,14 @@ def describe(pad: PadConfig) -> Dict[str, Any]:
             input_id: _describe_action(action)
             for input_id, action in overrides.items()
         }
+    # Layers: same shape as profiles - a name and its overrides - rendered with
+    # the same widgets, since a layer override is a binding like any other.
+    layers: Dict[str, Any] = {}
+    for layer_name, overrides in pad.layers.items():
+        layers[layer_name] = {
+            input_id: _describe_action(action)
+            for input_id, action in overrides.items()
+        }
     states: Dict[str, Any] = {}
     for state in AgentState:
         light = pad.lighting.for_state(state)
@@ -425,6 +446,10 @@ def describe(pad: PadConfig) -> Dict[str, Any]:
         "bindings": bindings,
         "profiles": profiles,
         "profile_poll_ms": pad.profile_poll_ms,
+        "layers": layers,
+        "terminal_app": pad.terminal_app,
+        "tap_click": pad.joystick.tap_click,
+        "tap_click_button": pad.joystick.tap_click_button,
         "states": states,
         "warnings": list(pad.warnings),
     }

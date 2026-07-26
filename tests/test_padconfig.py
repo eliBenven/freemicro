@@ -224,6 +224,35 @@ def test_invalid_joystick_is_rejected(joystick):
         parse({"version": 1, "bindings": {}, "joystick": joystick})
 
 
+def test_tap_click_defaults_on_with_a_left_button():
+    pad = parse({"version": 1, "bindings": {}})
+    assert pad.joystick.tap_click is True
+    assert pad.joystick.tap_click_button == "left"
+
+
+def test_tap_click_button_is_validated():
+    with pytest.raises(PadConfigError):
+        parse({"version": 1, "bindings": {},
+               "joystick": {"tap_click_button": "sideways"}})
+
+
+def test_tap_click_can_be_turned_off_in_config():
+    pad = parse({"version": 1, "bindings": {},
+                 "joystick": {"tap_click": False, "tap_click_button": "right"}})
+    assert pad.joystick.tap_click is False
+    assert pad.joystick.tap_click_button == "right"
+
+
+def test_terminal_app_defaults_and_can_be_disabled():
+    assert parse({"version": 1, "bindings": {}}).terminal_app == "Terminal"
+    assert parse({"version": 1, "bindings": {},
+                  "terminal_app": "iTerm2"}).terminal_app == "iTerm2"
+    assert parse({"version": 1, "bindings": {},
+                  "terminal_app": False}).terminal_app == ""
+    assert parse({"version": 1, "bindings": {},
+                  "terminal_app": "off"}).terminal_app == ""
+
+
 def test_unbound_joystick_direction_warns():
     pad = parse({"version": 1, "bindings": {},
                  "joystick": {"mode": "directions"}})

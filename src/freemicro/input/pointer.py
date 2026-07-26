@@ -90,8 +90,40 @@ DEFAULT_STALE_SECONDS = 4.0
 #: catch-up and at most a small nudge even at full speed.
 DEFAULT_MAX_STEP = 0.05
 
+#: Tap-to-click. The analogue stick has no physical button (the pad reports only
+#: ``v.oai.rad {a, d}``), so a *tap* - a quick deflect-and-return that never
+#: became real cursor movement - is treated as a left click. That makes the
+#: stick a full trackpad.
+#:
+#: The exact rule, and why each half is here:
+#:
+#: A tap fires a click when ALL THREE hold:
+#:
+#: 1. The stick crossed the **action deadzone** (:attr:`JoystickConfig.deadzone`,
+#:    0.6) - a deliberate push, not the stick's resting slop. This is the
+#:    "exceeded the activity deadzone" half, and it reuses the very threshold
+#:    that already means "the user meant this" in ``directions`` mode.
+#: 2. It **returned to centre** (below :attr:`pointer_deadzone`) within
+#:    :data:`TAP_MAX_SECONDS` of that crossing. The pad sends an explicit
+#:    ``d = 0`` on release, so the return is a real sample, not an inferred one.
+#: 3. The cursor moved **no more than** :data:`TAP_MAX_TRAVEL_PX` in total
+#:    between the crossing and the return.
+#:
+#: (2) and (3) together are what keep a fast intended *move* from firing a
+#: click: a move either lingers past the window or has already carried the
+#: cursor well past a few pixels by the time it could return. A sustained hold
+#: (the stick held out) trips (2) on the tick clock and disarms even while the
+#: pad is silent. Both numbers are deliberately generous enough that an ordinary
+#: flick registers and tight enough that pointing never does; they are constants
+#: rather than config because they are a property of the gesture, not a taste -
+#: the enable switch and the button are the knobs a user actually wants.
+TAP_MAX_SECONDS = 0.2
+TAP_MAX_TRAVEL_PX = 30.0
+
 #: Move callback: whole-pixel dx, dy, relative to wherever the cursor is.
 MoveFn = Callable[[int, int], None]
+#: Click callback: the mouse button name a completed tap should click.
+ClickFn = Callable[[str], None]
 Clock = Callable[[], float]
 #: How the loop waits between ticks. Always called with an explicit number of
 #: seconds - there is no unbounded wait anywhere in this module, because an
@@ -197,6 +229,14 @@ class PointerEngine:
         self._acc_x = 0.0
         self._acc_y = 0.0
         self._precision = False
+        #: Tap detection. Armed when the stick crosses the action deadzone;
+        #: ``_tap_travel`` is the whole-pixel distance the cursor has moved since,
+        #: accumulated on the tick thread. A completed tap increments
+        #: ``_pending_taps``, which :meth:`take_tap` drains.
+        self._tap_armed = False
+        self._tap_start = 0.0
+        self._tap_travel = 0.0
+        self._pending_taps = 0
 
     # -- input ------------------------------------------------------------
 
@@ -215,6 +255,66 @@ class PointerEngine:
             self._angle = float(angle)
             self._distance = float(distance)
             self._sampled_at = now
+            self._tap_sample(float(distance), now)
+
+    # -- tap-to-click -----------------------------------------------------
+
+    def _tap_sample(self, distance: float, now: float) -> None:
+        """Advance the tap machine from one raw sample. Caller holds the lock.
+
+        Arming and completion both live here because they are the two things the
+        raw ``d`` stream can tell us: a deliberate push past the action deadzone,
+        and the explicit return to centre the pad sends on release. The pixel
+        budget that separates a tap from a fast move is tracked on the tick
+        thread (see :meth:`_tap_tick`), which is the only place that knows how
+        far the cursor actually went.
+        """
+        config = self.config
+        if not config.tap_click or not config.pointing:
+            self._tap_armed = False
+            return
+        if not self._tap_armed:
+            if distance >= config.deadzone:
+                self._tap_armed = True
+                self._tap_start = now
+                self._tap_travel = 0.0
+            return
+        if (now - self._tap_start) > TAP_MAX_SECONDS or (
+            self._tap_travel > TAP_MAX_TRAVEL_PX
+        ):
+            # Too slow, or the cursor has already travelled too far: this is a
+            # move or a hold, not a tap. Disarm and wait for the next crossing.
+            self._tap_armed = False
+        elif distance <= config.pointer_deadzone:
+            # Back to centre, in time and within budget: a tap.
+            self._tap_armed = False
+            self._pending_taps += 1
+
+    def _tap_tick(self, dx: int, dy: int, now: float) -> None:
+        """Fold one tick's cursor movement into the armed tap. Holds the lock.
+
+        This is what makes a sustained deflection fail to tap even while the pad
+        is silent: the tick clock keeps running, so the window closes on its own,
+        and a deflection that moved the cursor is disqualified by its own pixels.
+        """
+        if not self._tap_armed:
+            return
+        if dx or dy:
+            self._tap_travel += math.hypot(dx, dy)
+        if (now - self._tap_start) > TAP_MAX_SECONDS or (
+            self._tap_travel > TAP_MAX_TRAVEL_PX
+        ):
+            self._tap_armed = False
+
+    def take_tap(self) -> int:
+        """How many taps have completed since the last call, clearing the count.
+
+        Returned as a count rather than a bool so two quick taps deliver two
+        clicks - the caller turns each into one click through the backend.
+        """
+        with self._lock:
+            taps, self._pending_taps = self._pending_taps, 0
+            return taps
 
     def set_precision(self, on: bool) -> None:
         """Engage or release precision mode (see ``joystick.precision_key``)."""
@@ -229,6 +329,9 @@ class PointerEngine:
             self._last_tick = None
             self._acc_x = self._acc_y = 0.0
             self._precision = False
+            self._tap_armed = False
+            self._tap_travel = 0.0
+            self._pending_taps = 0
 
     # -- output -----------------------------------------------------------
 
@@ -297,11 +400,14 @@ class PointerEngine:
                 # Centre, stale or precision-scaled to nothing: drop the
                 # remainder so it cannot leak into the next flick as a jump.
                 self._acc_x = self._acc_y = 0.0
+                self._tap_tick(0, 0, now)
                 return (0, 0)
             if previous is None:
+                self._tap_tick(0, 0, now)
                 return (0, 0)  # first tick only establishes the baseline
             dt = now - previous
             if dt <= 0.0:
+                self._tap_tick(0, 0, now)
                 return (0, 0)
             dt = min(dt, self.max_step)
             self._acc_x += vector.vx * dt
@@ -312,6 +418,7 @@ class PointerEngine:
             dx, dy = int(self._acc_x), int(self._acc_y)
             self._acc_x -= dx
             self._acc_y -= dy
+            self._tap_tick(dx, dy, now)
             return (dx, dy)
 
 
@@ -451,6 +558,7 @@ class Pointer:
         config: JoystickConfig,
         move: MoveFn,
         *,
+        click: Optional[ClickFn] = None,
         clock: Optional[Clock] = None,
         sleep: Optional[SleepFn] = None,
         engine: Optional[PointerEngine] = None,
@@ -463,6 +571,10 @@ class Pointer:
             self.engine, move, tick_hz=config.tick_hz, clock=self.clock,
             sleep=sleep,
         )
+        #: Where a completed tap goes. ``None`` disables click delivery entirely
+        #: (the detector still runs but its taps are dropped), which is what a
+        #: caller that only wants motion passes.
+        self.click = click
         self.autostart = autostart
 
     # -- lifecycle --------------------------------------------------------
@@ -488,7 +600,25 @@ class Pointer:
         if self.autostart and vector.moving and not self.loop.running:
             self.loop.start()
         self.loop.nudge()
+        self._deliver_taps()
         return vector
+
+    def _deliver_taps(self) -> None:
+        """Turn any completed tap into a click through the click callback.
+
+        Drained here, on the sample thread, because a tap completes on the
+        return-to-centre sample this same call just fed the engine - so the
+        click lands with the gesture rather than one tick later, and never on the
+        tick thread that only ever *disarms* a tap.
+        """
+        if self.click is None:
+            return
+        taps = self.engine.take_tap()
+        if not taps:
+            return
+        button = self.engine.config.tap_click_button
+        for _ in range(taps):
+            self.click(button)
 
     def set_precision(self, on: bool) -> None:
         self.engine.set_precision(on)
@@ -505,6 +635,8 @@ class Pointer:
 __all__ = [
     "DEFAULT_MAX_STEP",
     "DEFAULT_STALE_SECONDS",
+    "TAP_MAX_SECONDS",
+    "TAP_MAX_TRAVEL_PX",
     "Pointer",
     "PointerEngine",
     "PointerLoop",

@@ -1174,6 +1174,20 @@ def _print_keymap(pad) -> None:
     if unbound:
         print(f"\n  unbound: {', '.join(unbound)}")
 
+    # New-terminal on an empty Agent Key: say it once, plainly, with the switch.
+    from freemicro.input.actions import FOCUS_SESSION
+
+    if any(a.kind == FOCUS_SESSION for a in pad.bindings.values()):
+        if pad.terminal_app:
+            print(f"\n  Empty Agent Key: opens a new {pad.terminal_app} window "
+                  f"(there is nothing live\n  to focus). Set \"terminal_app\" to "
+                  f"another app, or false to leave empty keys\n  inert; a single "
+                  f"key opts out with {{\"new_terminal\": false}}.")
+        else:
+            print("\n  Empty Agent Key: stays inert (\"terminal_app\" is off). "
+                  "Set it to a terminal\n  app name to open a new window on an "
+                  "unlit key.")
+
     # Chords live in their own mapping, keyed by the sorted members, so a
     # listing that walks `bindings` alone shows nothing for a chord the user
     # just saved - and "it did not save" is the wrong conclusion to invite.
@@ -1223,6 +1237,34 @@ def _print_keymap(pad) -> None:
               f"lookup, not\n  an OS call. Chords, joystick and lighting stay "
               f"global.")
 
+    # Layers override single-key bindings while a layer trigger is held (a
+    # keyboard Fn key). Shown as its own section, each override next to the base
+    # binding it shadows, and naming which key(s) switch each layer on.
+    if pad.layers:
+        from freemicro.input.actions import layer_name
+
+        triggers: dict = {}
+        for input_id, action in pad.bindings.items():
+            name = layer_name(action)
+            if name:
+                triggers.setdefault(name, []).append(input_id)
+
+        print("\nLayers (hold a trigger key for a second binding set)")
+        for name, overrides in pad.layers.items():
+            held_by = ", ".join(triggers.get(name, [])) or "(no trigger bound)"
+            print(f"  layer {name!r} - hold {held_by}:")
+            ordered = [i for i in KNOWN_INPUTS if i in overrides]
+            ordered += [i for i in overrides if i not in KNOWN_INPUTS]
+            for input_id in ordered:
+                action = overrides[input_id]
+                base = pad.bindings.get(input_id)
+                was = base.describe() if base is not None else "(unbound)"
+                print(f"    {input_id:9} {action.label:16} {action.describe()}"
+                      f"   (base: {was})")
+        print("\n  Precedence while a layer is held: layer > profile > base. A "
+              "key the layer\n  does not name keeps its normal binding. The "
+              "trigger itself types nothing.")
+
     _print_activity_lights(pad)
 
     print("\nLighting")
@@ -1262,6 +1304,11 @@ def _print_keymap(pad) -> None:
                   f"{joystick.precision_scale:g}x speed")
         if joystick.invert_y:
             print("  vertical axis inverted")
+        if joystick.tap_click:
+            print(f"  tap-to-click: a quick deflect-and-return fires a "
+                  f"{joystick.tap_click_button} click (the stick has no button)")
+        else:
+            print("  tap-to-click: off")
         print("  the four JOY_* bindings below do not fire in this mode")
     else:
         print(f"  deadzone={joystick.deadzone:g} origin={joystick.origin:g}")

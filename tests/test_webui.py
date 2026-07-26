@@ -1575,6 +1575,36 @@ def test_describe_exposes_profiles_for_the_browser(profiled):
     assert chrome["summary"] == "press cmd+t"
 
 
+def test_describe_exposes_layers_terminal_and_tap_for_the_browser(tmp_path):
+    path = tmp_path / "keymap.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "terminal_app": "iTerm2",
+        "bindings": {"ACT09": {"action": "layer", "layer": "fn"}},
+        "layers": {"fn": {"ACT06": {"action": "key", "key": "cmd+t"}}},
+        "joystick": {"tap_click": True, "tap_click_button": "left"},
+    }, indent=2), encoding="utf-8")
+    described = configio.describe(padconfig.load(path))
+    assert described["terminal_app"] == "iTerm2"
+    assert described["tap_click"] is True
+    assert described["tap_click_button"] == "left"
+    assert described["layers"]["fn"]["ACT06"]["summary"] == "press cmd+t"
+
+
+def test_a_layer_binding_from_a_form_is_coerced_like_a_base_one(tmp_path):
+    path = tmp_path / "keymap.json"
+    document = {
+        "version": 1,
+        "bindings": {"ACT09": {"action": "layer", "layer": "fn"}},
+        "layers": {"fn": {"ACT06": {"action": "text", "text": "go",
+                                    "submit": "true"}}},
+    }
+    path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+    configio.save_document(path, document)
+    saved = configio.read_document(path)
+    assert saved["layers"]["fn"]["ACT06"]["submit"] is True
+
+
 def test_a_profile_binding_from_a_form_is_coerced_like_a_base_one(profiled):
     document = json.loads(profiled.read_text(encoding="utf-8"))
     # A browser sends strings; a profile override must be coerced too.

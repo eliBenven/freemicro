@@ -54,6 +54,7 @@ from freemicro.agentkeys import (
     normalise_project,
     resolve_slots,
 )
+from freemicro.input.keys import escape_applescript
 from freemicro.state.engine import SessionState, tty_for_pid
 
 #: ``TERM_PROGRAM`` values mapped to the macOS application name to activate.
@@ -79,6 +80,16 @@ TERMINAL_APPS: Dict[str, str] = {
 #: The two emulators whose AppleScript dictionaries expose a tab's tty, which is
 #: what lets us select one exact tab instead of raising a whole application.
 SCRIPTABLE_APPS = ("Terminal", "iTerm2")
+
+#: Terminals with no scriptable "new window" verb that nonetheless honour the
+#: near-universal Cmd-N shortcut. For these, opening a window means activating
+#: the app and synthesising Cmd-N through System Events - which needs the app
+#: frontmost, hence the activate first. Anything not here (or scriptable) simply
+#: gets activated: right app, no new window, which is the graceful degradation.
+CMDN_NEW_WINDOW_APPS = (
+    "Ghostty", "Warp", "WezTerm", "Hyper", "kitty", "Alacritty", "Tabby",
+    "Rio", "Code", "Cursor",
+)
 
 #: A tty must look like a tty. This is the only value from an on-disk record
 #: that reaches an AppleScript, so it is pattern-checked rather than escaped -
@@ -214,6 +225,17 @@ class FocusPlan:
     @property
     def actionable(self) -> bool:
         return self.method != METHOD_NONE
+
+    @property
+    def slot_empty(self) -> bool:
+        """True when this key has no live session at all - an empty slot.
+
+        Distinct from "found the project but cannot pin its tab" (which carries
+        a ``session`` and is a deliberate no-op): this is the case an unlit Agent
+        Key is in, and the one where opening a new terminal is the right answer
+        rather than doing nothing.
+        """
+        return self.method == METHOD_NONE and self.session is None
 
     def describe(self) -> str:
         """One line for ``freemicro keys --list`` and the dry-run printer."""
@@ -353,6 +375,61 @@ def tab_script(app: str, tty: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Opening a new terminal window (the empty-Agent-Key behaviour)
+# ---------------------------------------------------------------------------
+
+def new_terminal_script(app: str) -> str:
+    """AppleScript that opens a fresh window in terminal ``app``.
+
+    Three tiers, by how much the app lets us script it:
+
+    * **Terminal / iTerm2** have a real "new window" verb in their dictionary,
+      so we use it - ``do script ""`` for Terminal (a window running just a
+      shell), ``create window with default profile`` for iTerm2.
+    * **Cmd-N terminals** (Ghostty, Warp, WezTerm, kitty, …) expose no such verb
+      but honour the standard Cmd-N shortcut, so we activate the app and
+      synthesise it through System Events.
+    * **Anything else** we simply activate - the right app comes forward even if
+      we cannot open a window for it. Graceful, never a guess.
+
+    Unlike :func:`tab_script` this *does* launch the app if it is not running:
+    the whole point is to get the user a terminal, and ``activate`` starting a
+    closed app is exactly what they asked for.
+    """
+    safe = escape_applescript(app)
+    if app == "Terminal":
+        return f'tell application "{safe}"\n  activate\n  do script ""\nend tell'
+    if app == "iTerm2":
+        return (
+            f'tell application "{safe}"\n'
+            "  activate\n"
+            "  create window with default profile\n"
+            "end tell"
+        )
+    if app in CMDN_NEW_WINDOW_APPS:
+        return (
+            f'tell application "{safe}" to activate\n'
+            "delay 0.15\n"
+            'tell application "System Events" to keystroke "n" using command down'
+        )
+    return f'tell application "{safe}" to activate'
+
+
+def open_new_terminal(app: str, backend: Any) -> bool:
+    """Open a new window in ``app`` through an action backend. ``False`` if not.
+
+    A blank or unknown-shaped app name is a no-op rather than an error: opening
+    a window is non-destructive, but so is doing nothing, and a key press must
+    never raise here.
+    """
+    name = str(app or "").strip()
+    if not name:
+        return False
+    backend.run_applescript(new_terminal_script(name))
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Resolving a slot, then acting
 # ---------------------------------------------------------------------------
 
@@ -477,10 +554,13 @@ __all__ = [
     "SCRIPTABLE_APPS",
     "TERMINAL_APPS",
     "FocusPlan",
+    "CMDN_NEW_WINDOW_APPS",
     "app_name_for",
     "clear_tty_cache",
     "current_slots",
     "is_scriptable",
+    "new_terminal_script",
+    "open_new_terminal",
     "perform",
     "plan_for_session",
     "plan_for_slot",

@@ -55,6 +55,7 @@ from freemicro.device.lighting import (
 from freemicro.input.actions import (
     FOCUS_SESSION,
     HOLD_KINDS,
+    LAYER,
     Action,
     validate_params,
 )
@@ -278,7 +279,7 @@ def _parse_profile_poll_ms(raw: Any) -> float:
 
 
 def _parse_profiles(
-    raw: Any, warnings: List[str]
+    raw: Any, warnings: List[str], terminal_app: str = ""
 ) -> "Dict[str, Dict[str, Action]]":
     """Parse the ``profiles`` section: per-app overrides of the base bindings.
 
@@ -326,7 +327,9 @@ def _parse_profiles(
                     "keys only."
                 )
             try:
-                overrides[input_id] = _parse_binding(input_id, binding_raw)
+                overrides[input_id] = _parse_binding(
+                    input_id, binding_raw, terminal_app
+                )
             except PadConfigError as exc:
                 raise PadConfigError(f"profile {app_name!r}: {exc}") from exc
             if input_id not in KNOWN_INPUTS:
@@ -337,6 +340,145 @@ def _parse_profiles(
                 )
         profiles[app_name] = overrides
     return profiles
+
+
+# ---------------------------------------------------------------------------
+# Opening a new terminal on an empty Agent Key
+# ---------------------------------------------------------------------------
+
+#: The terminal app an empty Agent Key opens a new window in, by default.
+#:
+#: Terminal.app, because it is the one macOS terminal guaranteed to be present
+#: on every Mac - so the default works with no configuration and no assumption
+#: about an app the user may not have installed. Anyone on iTerm2/Ghostty/Warp
+#: sets ``terminal_app`` once. See :func:`freemicro.focus.new_terminal_script`.
+DEFAULT_TERMINAL_APP = "Terminal"
+
+
+def _parse_terminal_app(raw: Any) -> str:
+    """Parse the top-level ``terminal_app``. Absent means the default.
+
+    Forgiving about how "off" is spelled - ``false``/``null``/``""``/``"off"``
+    all disable the new-terminal behaviour, so an unlit key stays inert - for
+    the same reason ``auto_dim`` is: a setting whose interesting values are "the
+    default" and "off" gets turned off in a hurry from three different surfaces.
+    """
+    if raw is None:
+        return DEFAULT_TERMINAL_APP
+    if raw is False:
+        return ""
+    if not isinstance(raw, str):
+        raise PadConfigError(
+            "\"terminal_app\" must be a terminal app name, or false to leave an "
+            f"empty Agent Key inert; got {raw!r}"
+        )
+    if raw.strip().lower() in ("off", "none", ""):
+        return ""
+    return raw.strip()
+
+
+# ---------------------------------------------------------------------------
+# Layers
+# ---------------------------------------------------------------------------
+
+def _parse_layers(
+    raw: Any, warnings: List[str], terminal_app: str = ""
+) -> "Dict[str, Dict[str, Action]]":
+    """Parse the ``layers`` section: named, held-for overrides of the bindings.
+
+    A layer is a partial ``bindings`` map, exactly like a profile - same action
+    rules, same string shorthand, same warning for an input id this build does
+    not recognise. The only structural difference from a profile is *how* it
+    turns on: a profile follows the frontmost app, a layer follows a physically
+    held ``layer`` trigger key. The validation is therefore identical, down to
+    the two things it refuses:
+
+    * a chord id (``"AG00+AG01"``). Chords stay global - resolving one needs both
+      keys held at once, and there is no coherent "while a layer is held" moment
+      to hang that on that is not already covered by holding the trigger.
+    * an empty or non-object layer body, which is a typo rather than an intent.
+
+    An empty or unreferenced layer is never an error: it simply contributes no
+    overrides. The trigger that names a missing layer is caught in :func:`parse`,
+    where both halves of the cross-reference are in scope.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise PadConfigError(
+            "\"layers\" must be an object of layer name -> overrides"
+        )
+    layers: Dict[str, Dict[str, Action]] = {}
+    for name, overrides_raw in raw.items():
+        if name.startswith("_"):
+            continue  # a comment key
+        if not isinstance(overrides_raw, dict):
+            raise PadConfigError(
+                f"layer {name!r} must be an object of input id -> binding"
+            )
+        overrides: Dict[str, Action] = {}
+        for input_id, binding_raw in overrides_raw.items():
+            if input_id.startswith("_"):
+                continue
+            if is_chord_id(input_id):
+                raise PadConfigError(
+                    f"layer {name!r} binds the chord {input_id!r}, but chords "
+                    "are global: they stay in the top-level \"bindings\" and fire "
+                    "the same whatever layer is held. A layer overrides single "
+                    "keys only."
+                )
+            try:
+                overrides[input_id] = _parse_binding(
+                    input_id, binding_raw, terminal_app
+                )
+            except PadConfigError as exc:
+                raise PadConfigError(f"layer {name!r}: {exc}") from exc
+            if input_id not in KNOWN_INPUTS:
+                warnings.append(
+                    f"layer {name!r} binds {input_id!r}, which is not an input "
+                    "this build knows about - it will only fire if your firmware "
+                    "reports that id."
+                )
+        layers[name] = overrides
+    return layers
+
+
+def _check_layer_references(
+    bindings: "Mapping[str, Action]",
+    profiles: "Mapping[str, Mapping[str, Action]]",
+    layers: "Mapping[str, Mapping[str, Action]]",
+    warnings: List[str],
+) -> None:
+    """Warn about any ``layer`` trigger that names a layer nobody defined.
+
+    A warning, not an error, to stay on the forgiving side for the same reason
+    an unknown input id is only a warning: the rest of the config is fine and
+    the pad should still run. But it is exactly the sort of silent no-op key that
+    reads as a broken product, so it is surfaced rather than swallowed.
+    """
+    defined = set(layers)
+    missing: Dict[str, str] = {}
+
+    def scan(where: str, source: "Mapping[str, Action]") -> None:
+        for input_id, action in source.items():
+            if action.kind != LAYER:
+                continue
+            name = str(action.params.get("layer", ""))
+            if name and name not in defined and name not in missing:
+                missing[name] = f"{where}{input_id!r}"
+
+    scan("", bindings)
+    for app_name, overrides in profiles.items():
+        scan(f"profile {app_name!r} ", overrides)
+    for layer_name, overrides in layers.items():
+        scan(f"layer {layer_name!r} ", overrides)
+
+    for name, where in missing.items():
+        warnings.append(
+            f"{where} triggers the layer {name!r}, which is not defined in "
+            "\"layers\" - holding it switches nothing on. Add a "
+            f"\"layers\": {{{name!r}: {{...}}}} block, or fix the trigger."
+        )
 
 
 _EXIT_MODES = ("leave", "off", "breath")
@@ -372,8 +514,12 @@ TICK_HZ_MAX = 480.0
 _JOYSTICK_FIELDS = (
     "mode", "deadzone", "origin", "directions", "pointer_deadzone",
     "max_speed", "gamma", "tick_hz", "precision_key", "precision_scale",
-    "invert_y", "comment",
+    "invert_y", "tap_click", "tap_click_button", "comment",
 )
+
+#: Mouse buttons a joystick tap may click. Kept here so a typo is caught while
+#: editing rather than at the moment the stick is tapped.
+TAP_CLICK_BUTTONS = ("left", "right", "middle")
 
 
 class PadConfigError(ValueError):
@@ -859,6 +1005,13 @@ class JoystickConfig:
     #: Flip the pointer's vertical axis. See :mod:`freemicro.input.pointer`
     #: for why up is angle 0.75 and when you might need this.
     invert_y: bool = False
+    #: Tap-to-click: a quick deflect-and-return that never became real cursor
+    #: movement fires a click, giving the buttonless stick a click. On by
+    #: default, and only ever active in ``pointer`` mode. See
+    #: :data:`freemicro.input.pointer.TAP_MAX_SECONDS`.
+    tap_click: bool = True
+    #: Which mouse button a tap clicks. One of :data:`TAP_CLICK_BUTTONS`.
+    tap_click_button: str = "left"
 
     @property
     def pointing(self) -> bool:
@@ -903,6 +1056,17 @@ class PadConfig:
     #: How often the frontmost app may be re-read. See
     #: :data:`DEFAULT_PROFILE_POLL_MS`.
     profile_poll_ms: float = DEFAULT_PROFILE_POLL_MS
+    #: Named layers: each a partial bindings map, keyed by layer name, that a
+    #: ``layer`` trigger switches on while it is held. Same shape and validation
+    #: as :attr:`profiles`. Empty for most configs, and when empty the bridge
+    #: never consults them. See :meth:`freemicro.input.bridge.Bridge._resolve`
+    #: for the precedence (layer > profile > base).
+    layers: Mapping[str, Mapping[str, Action]] = field(default_factory=dict)
+    #: The terminal app an empty Agent Key opens a new window in. ``""`` turns
+    #: the new-terminal behaviour off (an empty key stays inert). Injected into
+    #: each ``focus_session`` binding's ``terminal`` param at load time unless it
+    #: names its own.
+    terminal_app: str = DEFAULT_TERMINAL_APP
     source: Optional[Path] = None
     warnings: Sequence[str] = ()
 
@@ -1105,7 +1269,7 @@ def _parse_activity_light(input_id: str, raw: Any) -> ActivityLight:
     )
 
 
-def _parse_binding(input_id: str, raw: Any) -> Action:
+def _parse_binding(input_id: str, raw: Any, terminal_app: str = "") -> Action:
     if isinstance(raw, str):
         # Shorthand: "AG00": "/resume"  ==  type that text.
         raw = {"action": "text", "text": raw}
@@ -1120,18 +1284,26 @@ def _parse_binding(input_id: str, raw: Any) -> Action:
             f"binding for {input_id!r} is missing its \"action\" field"
         )
     params = {k: v for k, v in raw.items() if k not in _META_FIELDS}
-    if kind == FOCUS_SESSION and "slot" not in params and "project" not in params:
-        # "AG02": {"action": "focus_session"} means *this* key's slot. Only the
-        # config layer knows which input a binding belongs to, so it is filled
-        # in here rather than making every user repeat the index they can see
-        # printed on the key.
-        if input_id in AGENT_KEYS:
-            params["slot"] = AGENT_KEYS.index(input_id)
-        else:
-            raise PadConfigError(
-                f"binding for {input_id!r}: '{FOCUS_SESSION}' needs a \"slot\" "
-                "(0-5) or a \"project\" path unless it is on an Agent Key"
-            )
+    if kind == FOCUS_SESSION:
+        if "slot" not in params and "project" not in params:
+            # "AG02": {"action": "focus_session"} means *this* key's slot. Only
+            # the config layer knows which input a binding belongs to, so it is
+            # filled in here rather than making every user repeat the index they
+            # can see printed on the key.
+            if input_id in AGENT_KEYS:
+                params["slot"] = AGENT_KEYS.index(input_id)
+            else:
+                raise PadConfigError(
+                    f"binding for {input_id!r}: '{FOCUS_SESSION}' needs a "
+                    "\"slot\" (0-5) or a \"project\" path unless it is on an "
+                    "Agent Key"
+                )
+        # The top-level terminal app is the default for opening a window on an
+        # empty key; a binding that names its own \"terminal\" keeps it. Injected
+        # here so the action carries it without every key repeating it, and only
+        # when the feature is on (terminal_app \"\" leaves it absent, i.e. off).
+        if terminal_app and "terminal" not in params:
+            params["terminal"] = terminal_app
     try:
         validate_params(kind, params)
     except ValueError as exc:
@@ -1267,6 +1439,15 @@ def _parse_joystick(raw: Any) -> JoystickConfig:
             "would latch on forever"
         )
 
+    tap_click_button = str(
+        raw.get("tap_click_button", defaults.tap_click_button)
+    ).lower()
+    if tap_click_button not in TAP_CLICK_BUTTONS:
+        raise PadConfigError(
+            f"\"joystick.tap_click_button\" must be one of "
+            f"{', '.join(TAP_CLICK_BUTTONS)}, got {raw.get('tap_click_button')!r}"
+        )
+
     return JoystickConfig(
         deadzone=deadzone,
         origin=origin,
@@ -1279,6 +1460,8 @@ def _parse_joystick(raw: Any) -> JoystickConfig:
         precision_key=precision_key,
         precision_scale=precision_scale,
         invert_y=bool(raw.get("invert_y", defaults.invert_y)),
+        tap_click=bool(raw.get("tap_click", defaults.tap_click)),
+        tap_click_button=tap_click_button,
     )
 
 
@@ -1566,6 +1749,7 @@ def parse(data: Any, source: Optional[Path] = None) -> PadConfig:
         raise PadConfigError("\"bindings\" must be an object of input id -> binding")
 
     warnings: List[str] = []
+    terminal_app = _parse_terminal_app(data.get("terminal_app"))
     bindings: Dict[str, Action] = {}
     chords: Dict[Tuple[str, ...], Action] = {}
     chord_written_as: Dict[Tuple[str, ...], str] = {}
@@ -1581,7 +1765,7 @@ def parse(data: Any, source: Optional[Path] = None) -> PadConfig:
                     "have no order, so only one of them can be bound"
                 )
             chord_written_as[members] = input_id
-            chord_action = _parse_binding(input_id, raw)
+            chord_action = _parse_binding(input_id, raw, terminal_app)
             if chord_action.label == input_id:
                 # No explicit label, so it fell back to the id as written. Logs
                 # name the chord canonically, and one chord with two spellings
@@ -1597,7 +1781,7 @@ def parse(data: Any, source: Optional[Path] = None) -> PadConfig:
                     "firmware reports that id."
                 )
             continue
-        bindings[input_id] = _parse_binding(input_id, raw)
+        bindings[input_id] = _parse_binding(input_id, raw, terminal_app)
         if input_id not in KNOWN_INPUTS:
             warnings.append(
                 f"{input_id!r} is not an input this build knows about - it will "
@@ -1628,8 +1812,15 @@ def parse(data: Any, source: Optional[Path] = None) -> PadConfig:
     joystick = _parse_joystick(data.get("joystick"))
     lighting = _parse_lighting(data.get("lighting"))
     agent_keys = _parse_agent_keys(data.get("agent_keys"), warnings)
-    profiles = _parse_profiles(data.get("profiles"), warnings)
+    profiles = _parse_profiles(data.get("profiles"), warnings, terminal_app)
     profile_poll_ms = _parse_profile_poll_ms(data.get("profile_poll_ms"))
+    layers = _parse_layers(data.get("layers"), warnings, terminal_app)
+
+    # A layer trigger that names a layer nobody defined is dead config: the key
+    # would switch nothing on. Caught here, where the triggers (in bindings,
+    # profiles and layers) and the layer names are both in scope, rather than
+    # failing silently the first time the key is held.
+    _check_layer_references(bindings, profiles, layers, warnings)
 
     lit = [
         (input_id, action)
@@ -1638,7 +1829,9 @@ def parse(data: Any, source: Optional[Path] = None) -> PadConfig:
         if action.light is not None
     ]
     for input_id, action in lit:
-        if action.kind not in HOLD_KINDS:
+        if action.kind not in HOLD_KINDS and action.kind != LAYER:
+            # A layer trigger is held like a hold, so a light on it is honest -
+            # on for exactly as long as the layer is - and needs no warning.
             # Not an error: "lit while the key is down" is a coherent thing for
             # any key to do, and a torch is a legitimate use of it. But the
             # reason people reach for this is dictation, and a *toggle* bound
@@ -1701,6 +1894,8 @@ def parse(data: Any, source: Optional[Path] = None) -> PadConfig:
         chord_settle_ms=chord_settle_ms,
         profiles=profiles,
         profile_poll_ms=profile_poll_ms,
+        layers=layers,
+        terminal_app=terminal_app,
         source=source,
         warnings=tuple(warnings),
     )
@@ -1805,7 +2000,9 @@ __all__ = [
     "CHORD_SETTLE_MS_MAX",
     "DEFAULT_CHORD_SETTLE_MS",
     "DEFAULT_PROFILE_POLL_MS",
+    "DEFAULT_TERMINAL_APP",
     "PROFILE_POLL_MS_MAX",
+    "TAP_CLICK_BUTTONS",
     "ENCODER_INPUTS",
     "ENCODER_TICKS",
     "DEFAULT_CONFIG_PATH",

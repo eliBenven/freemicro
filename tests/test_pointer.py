@@ -19,6 +19,8 @@ from freemicro.input.actions import RecordingBackend
 from freemicro.input.bridge import Bridge, joystick_line
 from freemicro.input.pointer import (
     DEFAULT_STALE_SECONDS,
+    TAP_MAX_SECONDS,
+    TAP_MAX_TRAVEL_PX,
     Pointer,
     PointerEngine,
     PointerLoop,
@@ -548,6 +550,113 @@ def test_switching_out_of_pointer_mode_stops_the_loop():
         assert not pointer.loop.running
     finally:
         pointer.close()
+
+
+# ---------------------------------------------------------------------------
+# Tap-to-click
+# ---------------------------------------------------------------------------
+#
+# Deterministic throughout: a scripted sample sequence and a hand-driven clock
+# and loop, so what is asserted is exactly the click the gesture would produce -
+# one for a tap, none for a move, a hold or a slow drift.
+
+def _tap_rig(**overrides):
+    """A pointer whose loop is stepped by hand, collecting moves and clicks."""
+    clock = FakeClock()
+    moves, clicks = [], []
+    engine = PointerEngine(config(**overrides))
+    loop = PointerLoop(
+        engine, lambda dx, dy: moves.append((dx, dy)),
+        clock=clock, sleep=lambda seconds: None, tick_hz=100.0,
+    )
+    pointer = Pointer(
+        config(**overrides),
+        move=lambda dx, dy: moves.append((dx, dy)),
+        click=lambda button: clicks.append(button),
+        clock=clock, engine=engine, loop=loop, autostart=False,
+    )
+    return pointer, engine, loop, clock, moves, clicks
+
+
+def test_a_quick_deflect_and_return_is_one_click():
+    pointer, engine, loop, clock, _, clicks = _tap_rig()
+    pointer.update(0.0, 0.7)      # cross the action deadzone: arm
+    clock.advance(0.05)
+    loop.step()                   # one tick's worth of (small) movement
+    pointer.update(0.0, 0.0)      # explicit return to centre, inside the window
+    assert clicks == ["left"], "a tap must fire exactly one click"
+
+
+def test_the_tap_button_is_configurable():
+    pointer, engine, loop, clock, _, clicks = _tap_rig(tap_click_button="right")
+    pointer.update(0.0, 0.7)
+    clock.advance(0.05)
+    loop.step()
+    pointer.update(0.0, 0.0)
+    assert clicks == ["right"]
+
+
+def test_a_sustained_moving_deflection_is_not_a_tap():
+    pointer, engine, loop, clock, moves, clicks = _tap_rig()
+    pointer.update(0.0, 0.7)
+    for _ in range(20):           # 400 ms of real cursor movement
+        clock.advance(0.02)
+        loop.step()
+    pointer.update(0.0, 0.0)
+    assert clicks == [], "a move must not click"
+    assert sum(abs(dx) for dx, dy in moves) > TAP_MAX_TRAVEL_PX
+
+
+def test_a_hold_past_the_window_is_not_a_tap():
+    pointer, engine, loop, clock, _, clicks = _tap_rig()
+    pointer.update(0.0, 0.7)
+    clock.advance(TAP_MAX_SECONDS + 0.1)  # held out well past the window
+    loop.step()
+    pointer.update(0.0, 0.0)
+    assert clicks == []
+
+
+def test_a_slow_drift_that_never_crosses_the_action_deadzone_is_not_a_tap():
+    pointer, engine, loop, clock, _, clicks = _tap_rig()
+    pointer.update(0.0, 0.3)      # above pointer_deadzone, below action deadzone
+    clock.advance(0.05)
+    loop.step()
+    pointer.update(0.0, 0.0)
+    assert clicks == []
+
+
+def test_a_fast_flick_across_the_screen_is_a_move_not_a_click():
+    """The disambiguation that matters most: a fast *intended* move is brief and
+    returns to centre, but has already carried the cursor far - so its travel,
+    not its duration, disqualifies it."""
+    pointer, engine, loop, clock, moves, clicks = _tap_rig(max_speed=4000.0)
+    pointer.update(0.0, 1.0)      # full deflection: fast
+    clock.advance(0.03)
+    loop.step()                   # first tick after centre only sets the baseline
+    clock.advance(0.03)
+    loop.step()                   # now integrating: ~120 px
+    pointer.update(0.0, 0.0)      # quick return - but far too much travel
+    assert clicks == []
+    assert sum(abs(dx) for dx, dy in moves) > TAP_MAX_TRAVEL_PX
+
+
+def test_tap_click_can_be_disabled():
+    pointer, engine, loop, clock, _, clicks = _tap_rig(tap_click=False)
+    pointer.update(0.0, 0.7)
+    clock.advance(0.05)
+    loop.step()
+    pointer.update(0.0, 0.0)
+    assert clicks == []
+
+
+def test_two_quick_taps_produce_two_clicks():
+    pointer, engine, loop, clock, _, clicks = _tap_rig()
+    for _ in range(2):
+        pointer.update(0.0, 0.7)
+        clock.advance(0.05)
+        loop.step()
+        pointer.update(0.0, 0.0)
+    assert clicks == ["left", "left"]
 
 
 def test_preview_reports_a_sample_without_adopting_it():

@@ -637,33 +637,81 @@ def _focus_plan(act: Action) -> Any:
         return focus.FocusPlan(reason="could not read the session store")
 
 
+def _new_terminal_enabled(act: Action) -> bool:
+    """Whether an empty-slot press should open a new terminal. On by default.
+
+    The switch is per-binding ``new_terminal`` (a bool), defaulted at config
+    load from the top-level ``terminal_app`` setting - if that is turned off,
+    the injected default is ``false`` and an unlit key stays inert.
+    """
+    return bool(act.params.get("new_terminal", True))
+
+
+def _terminal_app_of(act: Action) -> str:
+    """Which terminal app an empty-slot press opens, or ``""`` for none.
+
+    Filled in from the top-level ``terminal_app`` setting at load time unless
+    the binding names its own ``terminal``; empty means the feature is off.
+    """
+    return str(act.params.get("terminal", "") or "")
+
+
 def _describe_focus_session(act: Action) -> str:
     from freemicro import focus
 
     plan = _focus_plan(act)
     if isinstance(plan, focus.FocusPlan):
-        return plan.describe()
+        line = plan.describe()
+        app = _terminal_app_of(act)
+        if plan.slot_empty and _new_terminal_enabled(act) and app:
+            line += f"; opens a new {app} window if nothing is there"
+        return line
     return "focus this key's session"  # pragma: no cover - defensive
+
+
+def _check_focus_session(params: Mapping[str, Any]) -> None:
+    new_terminal = params.get("new_terminal")
+    if new_terminal is not None and not isinstance(new_terminal, bool):
+        raise ValueError(
+            f"'new_terminal' must be true or false, got {new_terminal!r}"
+        )
+    terminal = params.get("terminal")
+    if terminal is not None and not isinstance(terminal, str):
+        raise ValueError(f"'terminal' must be an app name, got {terminal!r}")
 
 
 @action(
     FOCUS_SESSION,
-    summary="Raise the terminal running this Agent Key's project. Does nothing "
-            "if that session is not live or its tab cannot be identified.",
-    optional=("slot", "project", "fallback"),
+    summary="Raise the terminal running this Agent Key's project; when the key "
+            "is empty (no live project) open a new terminal window instead "
+            "unless new_terminal=false.",
+    optional=("slot", "project", "fallback", "new_terminal", "terminal"),
     describe=_describe_focus_session,
+    check=_check_focus_session,
     modifier_safe=True,
 )
 def _run_focus_session(act: Action, backend: Backend) -> None:
-    """Bring a project's terminal tab to the front.
+    """Bring a project's terminal tab to the front, or open a new terminal.
 
-    Doing nothing is a correct outcome here, and the common one when a project
-    is not running. Raising the *wrong* window would be worse than silence: the
-    next thing typed would land somewhere unintended.
+    If the key resolves to a live project its tab is raised (raising the *wrong*
+    window would be worse than silence, so a session we cannot pin down is left
+    alone). If the slot is *empty* - nothing live to show, an unlit key - a new
+    terminal window is opened instead, so pressing a spare Agent Key is a way to
+    start work rather than a dead key. That half is off when the binding sets
+    ``new_terminal: false`` or no terminal app is configured.
     """
     from freemicro import focus
 
-    focus.perform(_focus_plan(act), backend)
+    plan = _focus_plan(act)
+    if focus.perform(plan, backend):
+        return
+    if not isinstance(plan, focus.FocusPlan) or not plan.slot_empty:
+        return
+    if not _new_terminal_enabled(act):
+        return
+    app = _terminal_app_of(act)
+    if app:
+        focus.open_new_terminal(app, backend)
 
 
 #: Answer the permission prompt of whichever session is actually asking.
@@ -966,6 +1014,57 @@ def _run_none(act: Action, backend: Backend) -> None:
     return None
 
 
+#: The action kind that makes a key a layer trigger. Named here because the
+#: bridge routes it specially (see :func:`is_layer`) and the config layer
+#: cross-checks that its ``layer`` names a defined layer.
+LAYER = "layer"
+
+
+def _check_layer(params: Mapping[str, Any]) -> None:
+    name = params.get("layer")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(
+            'a layer trigger needs a layer name, e.g. {"action": "layer", '
+            '"layer": "fn"}'
+        )
+
+
+@action(
+    LAYER,
+    summary="Hold for a second binding set: while this key is down, keys the "
+            "named layer defines resolve to it, like a keyboard Fn key. Types "
+            "nothing itself.",
+    required=("layer",),
+    describe=lambda act: f"layer: hold for the '{act.params.get('layer')}' bindings",
+    check=_check_layer,
+    modifier_safe=True,
+)
+def _run_layer(act: Action, backend: Backend) -> None:
+    """A pure modal switch: it types nothing and delivers nothing.
+
+    The bridge intercepts a layer trigger *before* this runs - it activates the
+    layer on press and retires it on release - so reaching here is a no-op by
+    design. Registered all the same so the kind is loadable, validated and
+    listed like any other.
+    """
+    return None
+
+
+def is_layer(action: Optional[Action]) -> bool:
+    """Whether this resolved binding is a layer trigger.
+
+    The one predicate the bridge consults to route a press to layer activation
+    instead of ordinary delivery. Kept here, beside :func:`is_latching`, next to
+    the kind it is a property of.
+    """
+    return action is not None and action.kind == LAYER
+
+
+def layer_name(action: Optional[Action]) -> str:
+    """The layer a trigger switches on, or ``""`` for a non-trigger."""
+    return str(action.params.get("layer", "")) if is_layer(action) else ""
+
+
 #: Action kinds whose meaning depends on key *release* as well as press. The
 #: bridge consults this rather than hard-coding a name.
 #:
@@ -1061,6 +1160,7 @@ __all__ = [
     "ANSWER_PERMISSION",
     "DEFAULT_LONG_PRESS_MS",
     "FOCUS_SESSION",
+    "LAYER",
     "Action",
     "ActionError",
     "ActionSpec",
@@ -1077,6 +1177,8 @@ __all__ = [
     "best_backend",
     "double_tap_combo",
     "is_latching",
+    "is_layer",
+    "layer_name",
     "perform",
     "release",
     "validate_params",
