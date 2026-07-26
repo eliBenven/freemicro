@@ -2318,6 +2318,10 @@ function renderAdvanced() {
       'How far you have to push before a flick registers. The default suits ' +
       'the stick on this unit; there is rarely a reason to change it.'),
 
+    // Per-app profiles: returns its own heading and body, so it is spread in
+    // for the same reason dictationSection() below is.
+    ...profilesSection(),
+
     el('h3', { text: 'Dictation' }),
     // `replaceChildren` is a native DOM method: unlike our own `el()` it does
     // NOT flatten arrays, it stringifies them. `dictationSection()` returns a
@@ -2370,6 +2374,209 @@ function agentSlots() {
 }
 
 
+
+/* ---------------------------------------------------- per-app profiles */
+
+/* A profile is a partial bindings map that shadows the base bindings while a
+ * given app is frontmost. The document stores it as
+ * `profiles: { "<app>": { "<input>": <binding> } }`; the runtime resolves the
+ * frontmost app off the key path (see docs/CUSTOMIZING.md) so an override costs
+ * a dict lookup, not a stall. This editor writes exactly that shape and leans
+ * on the same server-side validation every other edit does. */
+
+function peekProfiles() {
+  const p = S.doc.profiles;
+  return (p && typeof p === 'object') ? p : {};
+}
+
+function profilesDoc() {
+  if (!S.doc.profiles || typeof S.doc.profiles !== 'object') S.doc.profiles = {};
+  return S.doc.profiles;
+}
+
+/* The base binding's one-line summary, shorthand strings included - so a row
+ * can honestly say what a profile is overriding. */
+function baseSummary(id) {
+  const raw = bindings()[id];
+  if (typeof raw === 'string') return 'type “' + raw + '”';
+  return describeBinding(raw);
+}
+
+/* `fieldControl` without the per-key pair syncing: a profile override is a
+ * plain binding object with no physical twin, so it edits the object directly
+ * and reuses the same combo and app widgets the main editor does. */
+function profileFieldControl(spec, bound, set) {
+  const name = spec.name;
+  if (spec.widget === 'boolean') {
+    return el('label', { class: 'check' },
+      el('input', { type: 'checkbox', checked: !!bound[name],
+        onchange: (e) => { bound[name] = e.target.checked; changed(); } }),
+      spec.help || name);
+  }
+  if (spec.widget === 'app') return appField(spec, bound, null, set);
+  if (spec.widget === 'combo') return comboField(spec, bound, set);
+  if (spec.widget === 'textarea') {
+    return el('textarea', { placeholder: spec.placeholder || '',
+      oninput: (e) => set(e.target.value) },
+      bound[name] === undefined ? '' : String(bound[name]));
+  }
+  if (spec.widget === 'number') {
+    return el('input', { type: 'number', step: spec.step || 1,
+      value: bound[name] === undefined ? '' : bound[name],
+      oninput: (e) => set(e.target.value === '' ? '' : Number(e.target.value)) });
+  }
+  if (spec.widget === 'choice') {
+    return el('select', { onchange: (e) => set(e.target.value) },
+      spec.choices.map((c) => el('option', {
+        value: c,
+        selected: String(bound[name] === undefined ? '' : bound[name]) === c,
+      }, c || 'none')));
+  }
+  return el('input', { type: 'text', placeholder: spec.placeholder || '',
+    value: bound[name] === undefined ? '' : String(bound[name]),
+    oninput: (e) => set(e.target.value) });
+}
+
+/* One override binding: an action-kind picker, then that kind's own fields,
+ * editing the object at profiles[app][input] in place. */
+function profileOverrideEditor(app, inputId) {
+  const overrides = profilesDoc()[app];
+  const bound = overrides[inputId];
+  const isObj = bound && typeof bound === 'object';
+  const parts = [
+    picker({
+      value: isObj ? bound.action : '',
+      options: S.schema.actions.map((a) => ({ value: a.kind, label: a.kind,
+        hint: a.summary, terms: a.kind + ' ' + a.summary })),
+      search: 'Search actions',
+      placeholder: 'Choose what this key does here',
+      onpick: (kind) => {
+        const spec = S.schema.actions.find((a) => a.kind === kind);
+        const prev = isObj ? bound
+          : (typeof bound === 'string' ? { text: bound } : {});
+        const next = { action: kind };
+        for (const f of spec.fields) {
+          if (prev[f.name] !== undefined) next[f.name] = prev[f.name];
+        }
+        overrides[inputId] = next;
+        changed();
+        renderAdvanced();
+      },
+    }),
+  ];
+  if (!isObj && typeof bound === 'string') {
+    parts.push(el('p', { class: 'hint',
+      text: 'Currently a shorthand that types “' + bound +
+            '”. Pick a kind above to edit it.' }));
+  }
+  const spec = isObj
+    ? S.schema.actions.find((a) => a.kind === bound.action) : null;
+  if (spec) {
+    for (const f of spec.fields) {
+      const set = (v) => {
+        if (v === '' || v === undefined) delete bound[f.name];
+        else bound[f.name] = v;
+        changed();
+      };
+      parts.push(el('div', { class: 'field' },
+        el('span', { class: 'field-label', text: f.name }),
+        profileFieldControl(f, bound, set)));
+    }
+  }
+  return el('div', { class: 'profile-override' }, parts);
+}
+
+function profilesSection() {
+  const profiles = peekProfiles();
+  const names = Object.keys(profiles).filter((n) => !n.startsWith('_'));
+  const knownInputs = S.schema.known_inputs || [];
+  const nodes = [
+    el('h3', { text: 'Per-app profiles' }),
+    el('p', { class: 'hint' },
+      'Give a key a different job depending on which app is frontmost. A ' +
+      'profile overrides only the keys it names; every other key keeps its ' +
+      'normal binding. Chords, the thumbstick and the lights stay global.'),
+  ];
+
+  for (const app of names) {
+    const overrides = profiles[app] || {};
+    const rows = Object.keys(overrides)
+      .filter((k) => !k.startsWith('_'))
+      .map((inputId) => el('div', { class: 'profile-row' },
+        el('div', { class: 'profile-row-head' },
+          el('strong', { class: 'mono', text: inputId }),
+          el('span', { class: 'hint',
+            text: 'base: ' + baseSummary(inputId) }),
+          el('button', { class: 'btn tiny ghost', type: 'button',
+            onclick: () => {
+              delete profilesDoc()[app][inputId];
+              changed();
+              renderAdvanced();
+            } }, 'Remove')),
+        profileOverrideEditor(app, inputId)));
+
+    const remaining = knownInputs.filter((i) => !(i in overrides));
+    const adder = picker({
+      value: '',
+      options: remaining.map((i) => ({ value: i, label: i,
+        hint: baseSummary(i), terms: i })),
+      placeholder: 'Override another key here…',
+      search: 'Search keys',
+      empty: 'Every key already has an override in this profile.',
+      onpick: (inputId) => {
+        profilesDoc()[app][inputId] = { action: 'none' };
+        changed();
+        renderAdvanced();
+      },
+    });
+
+    nodes.push(el('div', { class: 'profile-card' },
+      el('div', { class: 'profile-card-head' },
+        el('strong', { text: 'When ' + app + ' is frontmost' }),
+        el('button', { class: 'btn tiny ghost', type: 'button',
+          onclick: () => {
+            delete profilesDoc()[app];
+            changed();
+            renderAdvanced();
+          } }, 'Delete profile')),
+      rows.length ? el('div', {}, rows)
+        : el('p', { class: 'hint', text: 'No overrides yet.' }),
+      el('div', { class: 'field' }, adder)));
+  }
+
+  const apps = S.apps || [];
+  const addNamed = (name) => {
+    const wanted = String(name || '').trim();
+    if (wanted && !(wanted in profilesDoc())) {
+      profilesDoc()[wanted] = {};
+      changed();
+      renderAdvanced();
+    }
+  };
+  nodes.push(el('div', { class: 'field' },
+    el('label', { text: 'Add a profile for an app' }),
+    picker({
+      value: '',
+      options: apps.filter((a) => !(a.name in profiles)).map((a) => ({
+        value: a.name, label: a.name, hint: a.where.replace('/System', ''),
+        terms: a.name + ' ' + a.where })),
+      placeholder: S.apps === null ? 'Loading installed apps…' : 'Choose an app',
+      search: 'Search installed apps',
+      empty: 'No installed app left to add. Type a name below instead.',
+      onpick: addNamed,
+    }),
+    el('details', { class: 'escape' },
+      el('summary', { text: 'Type an app name instead' }),
+      el('input', { type: 'text', class: 'mono',
+        placeholder: 'e.g. Chrome (matches “Google Chrome”)',
+        onkeydown: (e) => { if (e.key === 'Enter') addNamed(e.target.value); } }),
+      el('p', { class: 'hint',
+        text: 'Matched by exact app name, or a name contained in it (so ' +
+              '“Chrome” matches “Google Chrome”); the longest match wins. ' +
+              'Press Enter to add.' }))));
+
+  return nodes;
+}
 
 /* What each effect actually does on this hardware, in the picker, in plain
  * words - an integer in a dropdown tells nobody anything. */

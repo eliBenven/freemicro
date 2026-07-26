@@ -1542,3 +1542,78 @@ def test_token_is_long_and_unique():
     finally:
         first.server_close()
         second.server_close()
+
+
+# ---------------------------------------------------------------------------
+# Per-app profiles in the web editor
+# ---------------------------------------------------------------------------
+
+PROFILED = {
+    "version": 1,
+    "bindings": {"ACT06": {"action": "text", "text": "/base"}},
+    "profiles": {
+        "Google Chrome": {"ACT06": {"action": "key", "key": "cmd+t"}},
+        "Terminal": {"ACT06": "/clear"},
+    },
+}
+
+
+@pytest.fixture()
+def profiled(tmp_path):
+    path = tmp_path / "keymap.json"
+    path.write_text(json.dumps(PROFILED, indent=2), encoding="utf-8")
+    return path
+
+
+def test_describe_exposes_profiles_for_the_browser(profiled):
+    pad = padconfig.load(profiled)
+    described = configio.describe(pad)
+    assert "profiles" in described
+    assert described["profile_poll_ms"] == 300.0
+    chrome = described["profiles"]["Google Chrome"]["ACT06"]
+    assert chrome["kind"] == "key"
+    assert chrome["summary"] == "press cmd+t"
+
+
+def test_a_profile_binding_from_a_form_is_coerced_like_a_base_one(profiled):
+    document = json.loads(profiled.read_text(encoding="utf-8"))
+    # A browser sends strings; a profile override must be coerced too.
+    document["profiles"]["Terminal"]["ACT07"] = {"action": "text", "text": "go",
+                                                 "submit": "true"}
+    configio.save_document(profiled, document)
+    saved = configio.read_document(profiled)
+    assert saved["profiles"]["Terminal"]["ACT07"]["submit"] is True
+
+
+def test_editing_a_profile_leaves_the_base_bindings_untouched(profiled):
+    base = json.loads(profiled.read_text(encoding="utf-8"))
+    document = json.loads(json.dumps(base))
+    document["profiles"]["Google Chrome"]["ACT06"]["key"] = "cmd+w"
+    configio.save_document(profiled, document, base=base)
+    saved = configio.read_document(profiled)
+    # The one leaf we changed, and nothing else.
+    assert saved["profiles"]["Google Chrome"]["ACT06"]["key"] == "cmd+w"
+    assert saved["bindings"]["ACT06"] == {"action": "text", "text": "/base"}
+    assert saved["profiles"]["Terminal"]["ACT06"] == "/clear"
+
+
+def test_a_bad_profile_binding_is_refused_on_save(profiled):
+    document = json.loads(profiled.read_text(encoding="utf-8"))
+    document["profiles"]["Terminal"]["ACT06"] = {"action": "key",
+                                                 "key": "notakey!!"}
+    with pytest.raises(PadConfigError):
+        configio.save_document(profiled, document)
+
+
+def test_validate_accepts_a_new_profile(profiled):
+    api = Api(config_path=profiled)
+    try:
+        document = json.loads(profiled.read_text(encoding="utf-8"))
+        document.setdefault("profiles", {})["Slack"] = {
+            "ACT06": {"action": "text", "text": "/dnd"},
+        }
+        status, body = api.validate({"document": document})
+        assert status == 200
+        assert body["ok"] is True
+    finally:
+        api.close()

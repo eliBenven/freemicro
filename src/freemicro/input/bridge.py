@@ -454,6 +454,23 @@ class Bridge:
         #: latch records indefinitely, but the activity overlay times a light out
         #: from the clock, so a live latch has to keep saying it is live.
         self._latch_refresh_at: Optional[float] = None
+        #: The name of the frontmost app, as last handed to :meth:`set_frontmost`
+        #: by the run loop. ``None`` means "unknown / no profile", which resolves
+        #: to the base bindings. Read on the key path; the OS lookup that fills
+        #: it happens on the run loop's tick, never here.
+        self._frontmost: Optional[str] = None
+        #: The resolved override map for :attr:`_frontmost`, so a press is an
+        #: O(1) dict lookup and not a per-press scan of every profile. Empty
+        #: whenever no profile is active - which is always, unless the config has
+        #: profiles *and* a matching app is frontmost.
+        self._overrides: Mapping[str, Action] = {}
+        #: input id -> the exact action delivered on its last press, kept only
+        #: for kinds whose *release* matters (holds, the push-to-talk latch, a
+        #: long-press answer). The release replays this instead of re-resolving,
+        #: so a profile ``hold`` pressed in one app and let go after you have
+        #: switched to another still sends *its* key-up - never the new app's
+        #: binding, and never a stuck modifier. See :meth:`_run`.
+        self._pressed: Dict[str, Action] = {}
         self.settle = SettleTimer(
             self._expire, clock=self.clock, sleep=sleep, autostart=autostart
         )
@@ -509,6 +526,14 @@ class Bridge:
             self._unresolved.clear()
             self._chorded.clear()
             self._open_chords.clear()
+            # The new file may define, drop or rewrite the profile for whatever
+            # is frontmost, so the resolved overrides are recomputed against it
+            # now rather than left describing the old bindings. A press latched
+            # under the old file is dropped for the same reason the undecided
+            # state above is: it was resolved against bindings that no longer
+            # exist.
+            self._overrides = config.resolve_profile(self._frontmost)
+            self._pressed.clear()
             # A double-tap detector points at the old binding's timing; a reload
             # may have rebound or deleted the key. It holds nothing, so dropping
             # it strands nothing, and the next press rebuilds it.
@@ -519,6 +544,48 @@ class Bridge:
     def chord_keys(self) -> frozenset:
         """Every input id that takes part in a chord. Empty for most configs."""
         return self._chord_keys
+
+    # -- per-app profiles -------------------------------------------------
+
+    def set_frontmost(self, app: Optional[str]) -> bool:
+        """Tell the bridge which app is frontmost, so profiles can resolve.
+
+        Called by the run loop's tick from the *cached* value of a
+        :class:`freemicro.input.frontmost.FrontmostWatcher` - never from the key
+        path, and never from an OS call the key path would wait on. When the app
+        actually changes, the matching profile's overrides are resolved once,
+        here, so that every following press is a plain dict lookup.
+
+        Returns whether the frontmost changed, so a caller can log a switch.
+        Cheap and idempotent: an unchanged name does nothing, and a config with
+        no profiles resolves to an empty override map every time.
+        """
+        with self._lock:
+            if app == self._frontmost:
+                return False
+            self._frontmost = app
+            self._overrides = self._config.resolve_profile(app)
+            return True
+
+    @property
+    def frontmost(self) -> Optional[str]:
+        """The app the bridge currently resolves profiles against."""
+        return self._frontmost
+
+    def _resolve(self, input_id: str) -> Optional[Action]:
+        """The binding for ``input_id`` right now: profile override, else base.
+
+        Both halves are plain dict lookups. When no profile is active
+        (:attr:`_overrides` empty - the overwhelmingly common case) this is
+        exactly ``self._config.action_for(input_id)`` was before profiles
+        existed, so a config without them behaves byte for byte as it did.
+        """
+        overrides = self._overrides
+        if overrides:
+            override = overrides.get(input_id)
+            if override is not None:
+                return override
+        return self._config.action_for(input_id)
 
     @property
     def joystick(self) -> JoystickTracker:
@@ -566,6 +633,10 @@ class Bridge:
             self._holding.clear()
             self._hold_started.clear()
             self._suppressed.clear()
+            # Nothing is held any more, so no release is owed a replayed
+            # binding. Leaving stale entries here would let a key-up that
+            # arrives after this replay a hold we have just let go of.
+            self._pressed.clear()
         self.hold_timer.schedule(None)
         try:
             return self.backend.release_held_keys()
@@ -592,6 +663,7 @@ class Bridge:
             self._chorded.clear()
             self._open_chords.clear()
             self._doubletap.clear()
+            self._pressed.clear()
             del self._deferred[:]
         self.release_held_keys()
         self.pointer.close()
@@ -674,7 +746,7 @@ class Bridge:
         rule and not a routing preference: there is no path through this module
         that may type under a held modifier.
         """
-        return self._run(input_id, self.config.action_for(input_id), pressed)
+        return self._run(input_id, self._resolve(input_id), pressed)
 
     def _light(self, input_id: str, light: Optional[Any]) -> None:
         """Say that ``input_id``'s binding just went live, or stopped being.
@@ -722,7 +794,27 @@ class Bridge:
     def _run(
         self, input_id: str, action: Optional[Action], pressed: bool
     ) -> Optional[Dispatch]:
-        """Deliver one resolved binding. ``input_id`` may be a chord id."""
+        """Deliver one resolved binding. ``input_id`` may be a chord id.
+
+        A binding whose *release* carries meaning - a ``hold``, a push-to-talk
+        latch, a long-press answer - is latched on the way down and replayed on
+        the way up, so the release runs the same binding the press did even if
+        the frontmost app (and therefore the active profile) has changed in
+        between. Without it a profile ``hold`` pressed in one app and released in
+        another would resolve to the *new* app's binding on release, and the
+        real key it pressed would never come back up.
+        """
+        if pressed:
+            if action is not None and (
+                is_latching(action) or action.kind in HOLD_KINDS
+            ):
+                with self._lock:
+                    self._pressed[input_id] = action
+        else:
+            with self._lock:
+                latched = self._pressed.pop(input_id, None)
+            if latched is not None:
+                action = latched
         if is_latching(action):
             # Routed before everything below so a plain hold stays byte-identical:
             # a latching hold never presses a real modifier, never registers in
@@ -855,6 +947,10 @@ class Bridge:
             self._holding.pop(input_id, None)
             self._hold_started.pop(input_id, None)
             self._doubletap.pop(input_id, None)
+            # This *is* the release, so a real key-up that arrives later has
+            # nothing left to replay - drop the latch so it does not send a
+            # second, redundant key-up.
+            self._pressed.pop(input_id, None)
         try:
             with self._deliver:
                 release(action, self.backend)
@@ -1140,7 +1236,7 @@ class Bridge:
         if input_id not in self._chord_keys:
             return _one(self.fire(input_id, True))
 
-        action = self.config.action_for(input_id)
+        action = self._resolve(input_id)
         # An explicit "none" is how a key is declared a pure chord partner, and
         # it delivers nothing, so it is reported at once and costs no window.
         solo = action if action is not None and action.kind != "none" else None

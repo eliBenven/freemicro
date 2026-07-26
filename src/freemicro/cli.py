@@ -1200,6 +1200,29 @@ def _print_keymap(pad) -> None:
             print("\n  No key waits for anything: every chord member is "
                   "unbound on its own,\n  so these add no delay at all.")
 
+    # Per-app profiles override single-key bindings while a given app is
+    # frontmost. Shown as its own section, each override next to the base
+    # binding it replaces, so it is obvious both what changes and what falls
+    # through untouched.
+    if pad.profiles:
+        print("\nPer-app profiles (override the base bindings by frontmost app)")
+        for app_name, overrides in pad.profiles.items():
+            print(f"  when {app_name!r} is frontmost:")
+            ordered = [i for i in KNOWN_INPUTS if i in overrides]
+            ordered += [i for i in overrides if i not in KNOWN_INPUTS]
+            for input_id in ordered:
+                action = overrides[input_id]
+                base = pad.bindings.get(input_id)
+                was = base.describe() if base is not None else "(unbound)"
+                print(f"    {input_id:9} {action.label:16} {action.describe()}"
+                      f"   (base: {was})")
+        print(f"\n  Matching: exact app name, or a name contained in it (so "
+              f"'Chrome' matches\n  'Google Chrome'); the longest match wins. "
+              f"The frontmost app is re-read at\n  most every "
+              f"{pad.profile_poll_ms:g}ms, off the key path, so a press costs a "
+              f"lookup, not\n  an OS call. Chords, joystick and lighting stay "
+              f"global.")
+
     _print_activity_lights(pad)
 
     print("\nLighting")
@@ -1720,11 +1743,27 @@ def cmd_keys(args: argparse.Namespace) -> int:
         for result in bridge.handle(message):
             _print_dispatch(result)
 
+    # Per-app profiles need to know which app is frontmost. Only built and only
+    # polled when the config actually has profiles, on the reconnect loop's tick
+    # and never on the key path - a press reads the cached name. See
+    # docs/CUSTOMIZING.md and Bridge.set_frontmost.
+    frontmost_tick = None
+    if pad.profiles:
+        from freemicro.input.frontmost import FrontmostWatcher
+
+        watcher = FrontmostWatcher(interval=pad.profile_poll_ms / 1000.0)
+        print(f"Per-app profiles: {', '.join(pad.profiles)}   "
+              f"(re-read at most every {pad.profile_poll_ms:g}ms)")
+
+        def frontmost_tick() -> None:
+            bridge.set_frontmost(watcher.poll())
+
     from freemicro.device import close_shared, run_with_reconnect
 
     try:
         run_with_reconnect(
             handle,
+            on_tick=frontmost_tick,
             on_connect=lambda dev: print(f"  [pad connected: {dev.transport}]"),
             on_disconnect=lambda: print("  [pad disconnected - waiting…]"),
             seconds=args.seconds,
@@ -2107,7 +2146,8 @@ def _alert_project(sessions, state: AgentState) -> str:
 
 
 def _run_pipeline(
-    args: argparse.Namespace, headless: bool = False, watcher=None, alerter=None
+    args: argparse.Namespace, headless: bool = False, watcher=None, alerter=None,
+    frontmost=None,
 ) -> int:
     """The shared keys-in/lights-out loop behind ``run`` and the daemon.
 
@@ -2115,6 +2155,11 @@ def _run_pipeline(
     It is injectable so a test can assert what would be played or posted without
     making a sound; ``None`` builds one from the user's config, which is off
     unless an ``alerts`` block opts in.
+
+    ``frontmost`` is the cached view of the frontmost app that per-app profiles
+    resolve against. Injectable so a test can drive the app name from data; when
+    the config defines no profiles it is never even polled, so a pad without
+    them pays nothing for the feature.
     """
     from freemicro import staleness
     from freemicro.alerts import Alerter
@@ -2166,6 +2211,14 @@ def _run_pipeline(
     # none while somebody is tuning chords.
     bridge = Bridge(pad, backend, on_dispatch=_print_dispatch,
                     on_activity=overlay.note)
+    # The frontmost-app cache that per-app profiles resolve against. Built even
+    # when the current config has no profiles - it does no OS work until polled,
+    # and the tick only polls it when profiles are present - so a reload that
+    # *adds* profiles starts working without a restart. See Bridge.set_frontmost.
+    if frontmost is None:
+        from freemicro.input.frontmost import FrontmostWatcher
+
+        frontmost = FrontmostWatcher(interval=pad.profile_poll_ms / 1000.0)
     last: AgentState | None = None
     override = Path(args.config).expanduser() if getattr(args, "config", None) else None
     config_watcher = staleness.ConfigWatcher(
@@ -2290,6 +2343,15 @@ def _run_pipeline(
         # outlasted its timeout is the tick that repaints without it.
         _print_lighting(overlay.poll(), verbose)
         reload_config()
+        # Refresh which app is frontmost so the next press resolves its profile
+        # against a fresh answer - but only when profiles are configured, and
+        # only here on the tick, never on the key path. The watcher throttles the
+        # OS lookup to profile_poll_ms; the bridge reads the cached name.
+        if pad.profiles:
+            frontmost.interval = pad.profile_poll_ms / 1000.0
+            if bridge.set_frontmost(frontmost.poll()) and verbose:
+                print(f"  [profile] frontmost app: {bridge.frontmost or '(none)'}",
+                      flush=True)
         if watcher is not None:
             decision = watcher.poll()
             if decision is not None:

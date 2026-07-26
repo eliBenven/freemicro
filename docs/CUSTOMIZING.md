@@ -165,6 +165,74 @@ seeing `AG00+AG01` the pad could not act until it knew `AG02` was not coming,
 which is a second settle window paid by every two-key chord. Thirteen keys
 already give seventy-eight pairs.
 
+### Per-app profiles: one key, different jobs per app
+
+The same key can sensibly mean different things depending on what is in front of
+you: in a browser `ACT06` might open a tab, in your terminal it might clear the
+screen. A `profiles` block lets the config say so. Each profile is a **partial
+bindings map** that shadows the base bindings while a given app is frontmost:
+
+```json
+{
+  "bindings": {
+    "ACT06": {"action": "text", "text": "/clear", "submit": true}
+  },
+  "profiles": {
+    "Google Chrome": {"ACT06": {"action": "key", "key": "cmd+t"}},
+    "Terminal":      {"ACT06": "/clear"}
+  }
+}
+```
+
+A profile overrides **only the keys it names**. Everything it leaves out falls
+through to the base `bindings`, so you write the difference, not the whole map.
+A binding inside a profile takes exactly the same forms a base binding does, the
+string shorthand included, and it is validated at load time the same way, with
+the same warning if it names an input this build does not recognise.
+
+**Matching.** The frontmost app is matched by name, case-insensitively, in this
+order:
+
+1. an **exact** match on the profile's key (`"Terminal"` matches the app
+   `Terminal`);
+2. otherwise a **substring** match, so a profile named `"Chrome"` matches
+   `"Google Chrome"` because the key is contained in the app's name. When more
+   than one profile matches this way, the **longest** key wins, so a specific
+   `"Google Chrome"` profile beats a broad `"Chrome"` one.
+
+An app with no matching profile, or a lookup that fails, simply uses the base
+bindings. An empty or unknown profile is never an error.
+
+**What stays global.** Profiles override single-key bindings only. Chords, the
+thumbstick and all of the lighting are the same in every app. A chord's meaning
+depends on two keys being held at once, and making that answer depend on the
+frontmost app as well would double the timing logic for no real gain; a profile
+that tries to bind a chord id (`"AG00+AG01"`) is refused with an error saying so.
+
+**Holds and chords still behave.** A `hold` bound in a profile presses and
+releases correctly even if you switch apps mid-hold: the binding is latched when
+the key goes down and replayed when it comes up, so the key-up always matches the
+key-down and a modifier can never be left stuck. A profile-bound key that also
+takes part in a chord, participates in the modifier-bleed suppression, or opens a
+double-tap window works exactly as its base counterpart would.
+
+**Cost, and the freshness tradeoff.** Resolving a press is a dict lookup, never
+an OS round trip: the run loop caches which app is frontmost and refreshes that
+cache on its own tick, off the key path. The refresh is throttled by
+`profile_poll_ms` (default `300`, a top-level number in milliseconds, `0` means
+"every tick"). App switches are human-paced, so a third of a second is invisible
+in practice; the price is that a press in the first few hundred milliseconds
+after a switch can still act on the app you just left. Raise `profile_poll_ms`
+to poll less often, lower it to act on a switch sooner. **A config with no
+`profiles` never looks up the frontmost app at all**, so the feature costs
+nothing until you use it.
+
+`freemicro keys --list` prints every profile and, next to each override, the base
+binding it replaces. In the web editor (`freemicro config --web`) the profiles
+live under **Advanced -> Per-app profiles**, where you add an app from a picker
+of what is installed and give any key an app-specific binding with the same
+widgets the base bindings use.
+
 ### Adding a new action kind
 
 One decorated function in `src/freemicro/input/actions.py`:

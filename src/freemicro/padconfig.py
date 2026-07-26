@@ -230,6 +230,115 @@ def _parse_chord_settle(raw: Any) -> float:
         )
     return settle
 
+# ---------------------------------------------------------------------------
+# Per-app profiles
+# ---------------------------------------------------------------------------
+
+#: How often the run loop is allowed to re-read the frontmost app, in
+#: milliseconds. This is a *throttle on the OS lookup*, never a cost paid on the
+#: key path: the frontmost name is cached and refreshed by the run loop's own
+#: tick (see :meth:`freemicro.input.bridge.Bridge.set_frontmost`), and a key
+#: press only ever reads the cache - a dict lookup, not an OS round trip.
+#:
+#: **300 ms**, deliberately. App switches are human-paced: you Cmd-Tab, then you
+#: reach for a key, and the gap between the two is almost never under a third of
+#: a second. So a window this size is invisible in practice while keeping the
+#: lookup rare (a background daemon polling three times a second, only when
+#: profiles are actually configured, and not at all otherwise). The real
+#: staleness is bounded below by the run loop's own tick as well, so the pad can
+#: at worst act on the app you just left for a single press right after a switch
+#: - the price of never paying an OS call while your finger is on the key. Raise
+#: it to poll less; 0 means "every tick".
+DEFAULT_PROFILE_POLL_MS = 300.0
+
+#: The largest poll interval a config may ask for. Past this the pad would keep
+#: acting on a long-gone app for seconds after a switch, which stops being a
+#: cache and starts being a bug.
+PROFILE_POLL_MS_MAX = 10000.0
+
+
+def _parse_profile_poll_ms(raw: Any) -> float:
+    """Parse the top-level ``profile_poll_ms``. Absent means the default."""
+    if raw is None:
+        return DEFAULT_PROFILE_POLL_MS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise PadConfigError(
+            "\"profile_poll_ms\" must be a number of milliseconds, got "
+            f"{raw!r}"
+        ) from None
+    if not 0.0 <= value <= PROFILE_POLL_MS_MAX:
+        raise PadConfigError(
+            "\"profile_poll_ms\" must be between 0 (re-read every tick) and "
+            f"{PROFILE_POLL_MS_MAX:g}; anything longer keeps acting on an app "
+            "you have already switched away from"
+        )
+    return value
+
+
+def _parse_profiles(
+    raw: Any, warnings: List[str]
+) -> "Dict[str, Dict[str, Action]]":
+    """Parse the ``profiles`` section: per-app overrides of the base bindings.
+
+    A profile is a partial ``bindings`` map. Every input it names is validated
+    exactly as a base binding is - same action rules, same string shorthand,
+    same warning for an input id this build does not recognise - because a
+    binding that is wrong is wrong wherever it lives, and a profile is the last
+    place you want a typo to hide.
+
+    Two things a profile may **not** contain, and both are refused rather than
+    silently dropped:
+
+    * a chord id (``"AG00+AG01"``). Chords are global by design - resolving one
+      needs both keys held at once, and making that answer depend on which app
+      is frontmost would double the settle logic for a case nobody asked for.
+    * the same input twice - JSON already forbids duplicate keys, so this is
+      only reachable through a caller that hands us a pre-built dict.
+
+    An empty or unknown profile is never an error: it simply contributes no
+    overrides, so the base bindings show through. That is the whole fallback
+    contract, and it has to hold for a profile the user is midway through
+    writing as much as for one that names an app that is not running.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise PadConfigError("\"profiles\" must be an object of app name -> overrides")
+    profiles: Dict[str, Dict[str, Action]] = {}
+    for app_name, overrides_raw in raw.items():
+        if app_name.startswith("_"):
+            continue  # a comment key
+        if not isinstance(overrides_raw, dict):
+            raise PadConfigError(
+                f"profile {app_name!r} must be an object of input id -> binding"
+            )
+        overrides: Dict[str, Action] = {}
+        for input_id, binding_raw in overrides_raw.items():
+            if input_id.startswith("_"):
+                continue
+            if is_chord_id(input_id):
+                raise PadConfigError(
+                    f"profile {app_name!r} binds the chord {input_id!r}, but "
+                    "chords are global: they stay in the top-level \"bindings\" "
+                    "and fire the same in every app. A profile overrides single "
+                    "keys only."
+                )
+            try:
+                overrides[input_id] = _parse_binding(input_id, binding_raw)
+            except PadConfigError as exc:
+                raise PadConfigError(f"profile {app_name!r}: {exc}") from exc
+            if input_id not in KNOWN_INPUTS:
+                warnings.append(
+                    f"profile {app_name!r} binds {input_id!r}, which is not an "
+                    "input this build knows about - it will only fire if your "
+                    "firmware reports that id."
+                )
+        profiles[app_name] = overrides
+    return profiles
+
+
 _EXIT_MODES = ("leave", "off", "breath")
 
 #: Which protocol method the LED renderer uses for the backlight/underglow.
@@ -785,10 +894,71 @@ class PadConfig:
     chords: Mapping[Tuple[str, ...], Action] = field(default_factory=dict)
     #: See :data:`DEFAULT_CHORD_SETTLE_MS`.
     chord_settle_ms: float = DEFAULT_CHORD_SETTLE_MS
+    #: Per-app binding overrides, keyed by the app-match string the user wrote
+    #: (e.g. ``"Google Chrome"`` or ``"Chrome"``). Each value is a partial
+    #: bindings map that shadows :attr:`bindings` while that app is frontmost.
+    #: Empty for the overwhelming majority of configs, and when it is empty the
+    #: pad never looks up the frontmost app at all. See :meth:`resolve_profile`.
+    profiles: Mapping[str, Mapping[str, Action]] = field(default_factory=dict)
+    #: How often the frontmost app may be re-read. See
+    #: :data:`DEFAULT_PROFILE_POLL_MS`.
+    profile_poll_ms: float = DEFAULT_PROFILE_POLL_MS
     source: Optional[Path] = None
     warnings: Sequence[str] = ()
 
-    def action_for(self, input_id: str) -> Optional[Action]:
+    def resolve_profile(self, app: Optional[str]) -> Mapping[str, Action]:
+        """The override map in force while ``app`` is frontmost. Pure.
+
+        The whole per-app resolution rule, in one testable place. Given the
+        frontmost app's name it returns the single best-matching profile's
+        overrides, or an empty map when nothing matches - which is what makes
+        the base bindings the silent default.
+
+        Matching, in strict precedence:
+
+        1. **Exact**, case-insensitive: a profile named ``"Terminal"`` matches
+           the app ``"Terminal"`` regardless of case.
+        2. **Substring**, case-insensitive: a profile named ``"Chrome"`` matches
+           ``"Google Chrome"`` because the key is contained in the app's name.
+           The *longest* matching key wins, so a specific ``"Google Chrome"``
+           profile beats a broad ``"Chrome"`` one, and ties break toward the
+           first profile written.
+
+        An empty ``app`` (nothing frontmost, or the lookup failed) and a config
+        with no profiles both return ``{}`` - never an error, never a raise.
+        """
+        if not app or not self.profiles:
+            return {}
+        lowered = app.lower()
+        for key, overrides in self.profiles.items():
+            if key.lower() == lowered:
+                return overrides
+        best_key: Optional[str] = None
+        best: Mapping[str, Action] = {}
+        for key, overrides in self.profiles.items():
+            keyl = key.lower()
+            if keyl and keyl in lowered and (
+                best_key is None or len(keyl) > len(best_key)
+            ):
+                best_key = keyl
+                best = overrides
+        return best
+
+    def action_for(
+        self, input_id: str, app: Optional[str] = None
+    ) -> Optional[Action]:
+        """The binding that fires for ``input_id`` while ``app`` is frontmost.
+
+        Pure and total: with no ``app`` (or no profiles) this is exactly the
+        base lookup it always was - byte for byte - so every existing call site
+        that passes a single argument keeps its old behaviour and pays nothing.
+        With an ``app`` that matches a profile, an override the profile names
+        wins; everything the profile leaves unnamed falls through to the base.
+        """
+        if app and self.profiles:
+            override = self.resolve_profile(app).get(input_id)
+            if override is not None:
+                return override
         return self.bindings.get(input_id)
 
     def chord_for(self, members: Sequence[str]) -> Optional[Action]:
@@ -1458,6 +1628,8 @@ def parse(data: Any, source: Optional[Path] = None) -> PadConfig:
     joystick = _parse_joystick(data.get("joystick"))
     lighting = _parse_lighting(data.get("lighting"))
     agent_keys = _parse_agent_keys(data.get("agent_keys"), warnings)
+    profiles = _parse_profiles(data.get("profiles"), warnings)
+    profile_poll_ms = _parse_profile_poll_ms(data.get("profile_poll_ms"))
 
     lit = [
         (input_id, action)
@@ -1527,6 +1699,8 @@ def parse(data: Any, source: Optional[Path] = None) -> PadConfig:
         agent_keys=agent_keys,
         chords=chords,
         chord_settle_ms=chord_settle_ms,
+        profiles=profiles,
+        profile_poll_ms=profile_poll_ms,
         source=source,
         warnings=tuple(warnings),
     )
@@ -1630,6 +1804,8 @@ __all__ = [
     "CHORD_SEPARATOR",
     "CHORD_SETTLE_MS_MAX",
     "DEFAULT_CHORD_SETTLE_MS",
+    "DEFAULT_PROFILE_POLL_MS",
+    "PROFILE_POLL_MS_MAX",
     "ENCODER_INPUTS",
     "ENCODER_TICKS",
     "DEFAULT_CONFIG_PATH",

@@ -294,6 +294,26 @@ def _as_number(value: Any) -> Any:
     return value
 
 
+def _normalise_binding(binding: Any) -> None:
+    """Coerce one binding's browser-supplied fields to JSON types, in place.
+
+    Shared by the base bindings and every profile's overrides, because a
+    binding is a binding wherever it lives and must be coerced the same way.
+    """
+    if not isinstance(binding, dict):
+        return
+    for field in list(binding):
+        if field in _BOOL_FIELDS:
+            binding[field] = _as_bool(binding[field])
+        elif field in _NUMBER_FIELDS:
+            binding[field] = _as_number(binding[field])
+    light = binding.get("light")
+    if isinstance(light, dict):
+        for field in _ACTIVITY_LIGHT_NUMBER_FIELDS:
+            if field in light and light[field] is not None:
+                light[field] = _as_number(light[field])
+
+
 def normalise(document: Mapping[str, Any]) -> Dict[str, Any]:
     """Return a copy with browser-supplied fields coerced to JSON types.
 
@@ -306,18 +326,17 @@ def normalise(document: Mapping[str, Any]) -> Dict[str, Any]:
     bindings = data.get("bindings")
     if isinstance(bindings, dict):
         for binding in bindings.values():
-            if not isinstance(binding, dict):
-                continue
-            for field in list(binding):
-                if field in _BOOL_FIELDS:
-                    binding[field] = _as_bool(binding[field])
-                elif field in _NUMBER_FIELDS:
-                    binding[field] = _as_number(binding[field])
-            light = binding.get("light")
-            if isinstance(light, dict):
-                for field in _ACTIVITY_LIGHT_NUMBER_FIELDS:
-                    if field in light and light[field] is not None:
-                        light[field] = _as_number(light[field])
+            _normalise_binding(binding)
+
+    # A profile binding is coerced exactly like a base one - it is the same
+    # shape and hits the same load-time range checks - so an app-specific
+    # override typed into the editor fails in the editor, not on key-down.
+    profiles = data.get("profiles")
+    if isinstance(profiles, dict):
+        for overrides in profiles.values():
+            if isinstance(overrides, dict):
+                for binding in overrides.values():
+                    _normalise_binding(binding)
 
     lighting = data.get("lighting")
     if isinstance(lighting, dict):
@@ -354,9 +373,8 @@ def describe(pad: PadConfig) -> Dict[str, Any]:
     from freemicro.device.lighting import color_to_hex, effect_label
     from freemicro.state.engine import AgentState
 
-    bindings: Dict[str, Any] = {}
-    for input_id, action in pad.bindings.items():
-        bindings[input_id] = {
+    def _describe_action(action: Any) -> Dict[str, Any]:
+        return {
             "label": action.label,
             "kind": action.kind,
             "summary": action.describe(),
@@ -378,6 +396,18 @@ def describe(pad: PadConfig) -> Dict[str, Any]:
                 "summary": action.light.describe(),
             },
         }
+
+    bindings: Dict[str, Any] = {}
+    for input_id, action in pad.bindings.items():
+        bindings[input_id] = _describe_action(action)
+    # Per-app profiles: each app's overrides, described the same way as the base
+    # bindings so the browser can render them with the same widgets.
+    profiles: Dict[str, Any] = {}
+    for app_name, overrides in pad.profiles.items():
+        profiles[app_name] = {
+            input_id: _describe_action(action)
+            for input_id, action in overrides.items()
+        }
     states: Dict[str, Any] = {}
     for state in AgentState:
         light = pad.lighting.for_state(state)
@@ -393,6 +423,8 @@ def describe(pad: PadConfig) -> Dict[str, Any]:
         }
     return {
         "bindings": bindings,
+        "profiles": profiles,
+        "profile_poll_ms": pad.profile_poll_ms,
         "states": states,
         "warnings": list(pad.warnings),
     }

@@ -686,3 +686,127 @@ def test_battery_poll_must_be_positive():
 def test_battery_rejects_unknown_fields():
     with pytest.raises(PadConfigError):
         _lit(battery={"enabld": True})
+
+
+# ---------------------------------------------------------------------------
+# Per-app profiles
+# ---------------------------------------------------------------------------
+
+def _with_profiles(profiles, bindings=None, **extra):
+    doc = {
+        "version": 1,
+        "bindings": bindings or {"ACT06": "/base", "ACT07": {"action": "key",
+                                                             "key": "escape"}},
+        "profiles": profiles,
+    }
+    doc.update(extra)
+    return parse(doc)
+
+
+def test_no_profiles_leaves_resolution_byte_identical():
+    pad = parse({"version": 1, "bindings": {"ACT06": "/base"}})
+    assert pad.profiles == {}
+    # action_for with no app argument, and with an app but no profiles, are the
+    # same base lookup.
+    assert pad.action_for("ACT06") is pad.action_for("ACT06", "Google Chrome")
+    assert pad.action_for("ACT06").describe() == "type '/base'"
+    assert pad.resolve_profile("Anything") == {}
+
+
+def test_profile_overrides_only_the_keys_it_names():
+    pad = _with_profiles({
+        "Google Chrome": {"ACT06": {"action": "key", "key": "cmd+t"}},
+    })
+    # Overridden key changes under the app...
+    assert pad.action_for("ACT06", "Google Chrome").describe() == "press cmd+t"
+    # ...but an unnamed key falls through to the base binding.
+    assert pad.action_for("ACT07", "Google Chrome").describe() == "press escape"
+    # ...and with no app at all, the base wins.
+    assert pad.action_for("ACT06").describe() == "type '/base'"
+
+
+def test_profile_matches_exactly_case_insensitively():
+    pad = _with_profiles({"Terminal": {"ACT06": "/clear"}})
+    assert pad.action_for("ACT06", "Terminal").describe() == "type '/clear'"
+    assert pad.action_for("ACT06", "terminal").describe() == "type '/clear'"
+    assert pad.action_for("ACT06", "TERMINAL").describe() == "type '/clear'"
+
+
+def test_profile_matches_by_substring_alias():
+    # The documented alias: a short profile name matches the longer real name.
+    pad = _with_profiles({"Chrome": {"ACT06": {"action": "key", "key": "cmd+t"}}})
+    assert pad.action_for("ACT06", "Google Chrome").describe() == "press cmd+t"
+    # But a name that does not contain the key is not a match.
+    assert pad.action_for("ACT06", "Firefox").describe() == "type '/base'"
+
+
+def test_exact_match_beats_a_broader_substring():
+    pad = _with_profiles({
+        "Chrome": {"ACT06": "/broad"},
+        "Google Chrome": {"ACT06": "/specific"},
+    })
+    assert pad.action_for("ACT06", "Google Chrome").describe() == "type '/specific'"
+
+
+def test_longest_substring_wins_when_several_match():
+    pad = _with_profiles({
+        "Chrome": {"ACT06": "/broad"},
+        "Google Chrome": {"ACT06": "/specific"},
+    })
+    # An app name that only substring-matches both keys picks the longer one.
+    assert pad.action_for(
+        "ACT06", "Google Chrome Canary"
+    ).describe() == "type '/specific'"
+
+
+def test_unknown_or_empty_profile_is_never_an_error():
+    pad = _with_profiles({"Slack": {}})
+    assert pad.resolve_profile("Slack") == {}
+    assert pad.action_for("ACT06", "Slack").describe() == "type '/base'"
+    # An app nobody wrote a profile for is silently the base config.
+    assert pad.action_for("ACT06", "Photos").describe() == "type '/base'"
+
+
+def test_profile_binding_is_validated_like_a_base_binding():
+    with pytest.raises(PadConfigError) as exc:
+        _with_profiles({"Terminal": {"ACT06": {"action": "key",
+                                               "key": "notakey!!"}}})
+    assert "Terminal" in str(exc.value)
+
+
+def test_profile_may_not_bind_a_chord():
+    with pytest.raises(PadConfigError) as exc:
+        _with_profiles({"Terminal": {"AG00+AG01": "/x"}})
+    assert "chord" in str(exc.value).lower()
+
+
+def test_profile_must_be_an_object():
+    with pytest.raises(PadConfigError):
+        parse({"version": 1, "bindings": {"ACT06": "/x"}, "profiles": "nope"})
+
+
+def test_profile_warns_on_unknown_input_id():
+    pad = _with_profiles({"Terminal": {"ZZ99": "/x"}})
+    assert any("ZZ99" in w and "Terminal" in w for w in pad.warnings)
+
+
+def test_profile_comment_key_is_ignored():
+    pad = _with_profiles({
+        "_note": "profiles can carry a comment key too",
+        "Terminal": {"_why": "clear the screen", "ACT06": "/clear"},
+    })
+    assert list(pad.profiles) == ["Terminal"]
+    assert list(pad.profiles["Terminal"]) == ["ACT06"]
+
+
+def test_profile_poll_ms_default_and_override():
+    assert parse({"version": 1, "bindings": {"ACT06": "/x"}}).profile_poll_ms == 300.0
+    pad = _with_profiles({"Terminal": {"ACT06": "/x"}}, profile_poll_ms=120)
+    assert pad.profile_poll_ms == 120.0
+
+
+def test_profile_poll_ms_is_range_checked():
+    with pytest.raises(PadConfigError):
+        parse({"version": 1, "bindings": {"ACT06": "/x"}, "profile_poll_ms": 999999})
+    with pytest.raises(PadConfigError):
+        parse({"version": 1, "bindings": {"ACT06": "/x"}, "profile_poll_ms": "soon"})

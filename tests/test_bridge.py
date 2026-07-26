@@ -884,3 +884,143 @@ def test_a_lost_key_up_cannot_swallow_the_next_press_release():
     assert backend.held == ["ctrl+cmd+o"]
     bridge.handle(key_event("AG00", act=0))
     assert backend.held == [], "the stale chord mark swallowed the release"
+
+
+# ---------------------------------------------------------------------------
+# Per-app profiles
+# ---------------------------------------------------------------------------
+
+PROFILE_DOC = {
+    "version": 1,
+    "bindings": {
+        "ACT06": {"action": "text", "text": "/base"},
+        "ACT07": {"action": "key", "key": "escape"},
+        "ACT11": {"action": "hold", "key": "ctrl+cmd+o", "label": "talk"},
+    },
+    "profiles": {
+        "Google Chrome": {"ACT06": {"action": "key", "key": "cmd+t"}},
+        "Terminal": {
+            "ACT06": {"action": "text", "text": "/clear"},
+            "ACT11": {"action": "hold", "key": "cmd+shift+d"},
+        },
+    },
+}
+
+
+def _profile_bridge():
+    bridge = Bridge(parse(PROFILE_DOC), RecordingBackend(), autostart=False)
+    return bridge, bridge.backend
+
+
+def test_no_profile_active_resolves_to_the_base_binding():
+    bridge, backend = _profile_bridge()
+    # No frontmost set yet: the base binding fires, byte-identical to a config
+    # with no profiles at all.
+    bridge.handle(key_event("ACT06"))
+    assert _typed(backend) == ["/base"]
+
+
+def test_set_frontmost_switches_the_active_override():
+    bridge, backend = _profile_bridge()
+    assert bridge.set_frontmost("Google Chrome") is True
+    bridge.handle(key_event("ACT06"))
+    assert backend.calls[-1] == ("press_key", ("cmd+t",))
+    assert bridge.set_frontmost("Terminal") is True
+    bridge.handle(key_event("ACT06"))
+    assert _typed(backend) == ["/clear"]
+
+
+def test_set_frontmost_is_idempotent_and_reports_change():
+    bridge, _ = _profile_bridge()
+    assert bridge.set_frontmost("Terminal") is True
+    assert bridge.set_frontmost("Terminal") is False
+    assert bridge.frontmost == "Terminal"
+
+
+def test_an_app_with_no_profile_falls_back_to_base():
+    bridge, backend = _profile_bridge()
+    bridge.set_frontmost("Finder")
+    bridge.handle(key_event("ACT06"))
+    assert _typed(backend) == ["/base"]
+
+
+def test_a_profile_hold_presses_and_releases_the_profile_key():
+    bridge, backend = _profile_bridge()
+    bridge.set_frontmost("Terminal")
+    bridge.handle(key_event("ACT11", act=1))
+    assert backend.calls == [("hold_key", ("cmd+shift+d", True))]
+    bridge.handle(key_event("ACT11", act=0))
+    assert backend.calls[-1] == ("hold_key", ("cmd+shift+d", False))
+
+
+def test_a_profile_hold_survives_an_app_switch_mid_hold():
+    """The crux: pressed in Terminal, released after switching to Chrome. The
+    key-up must let go of the profile's key, not the app-now-frontmost binding -
+    otherwise a real modifier is left stuck down."""
+    bridge, backend = _profile_bridge()
+    bridge.set_frontmost("Terminal")
+    bridge.handle(key_event("ACT11", act=1))
+    assert backend.held == ["cmd+shift+d"]
+    # The user Cmd-Tabs away while still holding the key.
+    bridge.set_frontmost("Google Chrome")
+    bridge.handle(key_event("ACT11", act=0))
+    assert backend.held == [], "the profile hold was not released"
+    assert backend.calls[-1] == ("hold_key", ("cmd+shift+d", False))
+
+
+def test_switching_apps_does_not_change_a_base_hold_release():
+    bridge, backend = _profile_bridge()
+    # No profile for the frontmost app, so ACT11 is the base hold.
+    bridge.set_frontmost("Finder")
+    bridge.handle(key_event("ACT11", act=1))
+    assert backend.held == ["ctrl+cmd+o"]
+    bridge.set_frontmost("Terminal")  # Terminal *does* rebind ACT11
+    bridge.handle(key_event("ACT11", act=0))
+    # Still releases the base key it actually pressed, not Terminal's.
+    assert backend.held == []
+    assert backend.calls[-1] == ("hold_key", ("ctrl+cmd+o", False))
+
+
+def test_a_config_reload_recomputes_the_active_override():
+    bridge, backend = _profile_bridge()
+    bridge.set_frontmost("Terminal")
+    # A reload whose Terminal profile now clears differently.
+    reloaded = dict(PROFILE_DOC)
+    reloaded["profiles"] = {
+        "Terminal": {"ACT06": {"action": "text", "text": "/new"}},
+    }
+    bridge.config = parse(reloaded)
+    bridge.handle(key_event("ACT06"))
+    assert _typed(backend) == ["/new"]
+
+
+def test_removing_profiles_on_reload_returns_to_base():
+    bridge, backend = _profile_bridge()
+    bridge.set_frontmost("Terminal")
+    bridge.config = parse({"version": 1, "bindings": PROFILE_DOC["bindings"]})
+    bridge.handle(key_event("ACT06"))
+    assert _typed(backend) == ["/base"]
+
+
+def test_a_profile_override_participates_in_a_chord():
+    """Chords are global; a profile that overrides a chord member's *solo*
+    binding must not stop the chord firing when both keys are pressed."""
+    doc = {
+        "version": 1,
+        "bindings": dict(CHORD_BINDINGS),
+        "profiles": {"Terminal": {"AG00": {"action": "text", "text": "prof0"}}},
+    }
+    clock = FakeClock()
+    bridge = Bridge(parse(doc), RecordingBackend(), clock=clock, autostart=False)
+    backend = bridge.backend
+    bridge.set_frontmost("Terminal")
+    # Both keys together: the global chord fires, not the profile solo.
+    assert bridge.handle(key_event("AG00")) == []
+    assert bridge.handle(key_event("AG01"))[0].input_id == "AG00+AG01"
+    assert _typed(backend) == ["both"]
+    bridge.handle(key_event("AG01", act=0))
+    bridge.handle(key_event("AG00", act=0))
+    # AG00 alone, in Terminal, then fires the profile solo and waits the window.
+    bridge.handle(key_event("AG00"))
+    bridge.handle(key_event("AG00", act=0))
+    assert _typed(backend) == ["both", "prof0"]
