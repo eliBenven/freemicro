@@ -4,6 +4,28 @@ All notable changes to FreeMicro are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-26
+
+Configurability: the pad adapts to context, and every key can carry more.
+
+### Added
+- **Per-app profiles** (`profiles`): one key does different things depending on
+  which app is frontmost. Overrides only the keys it names; matched by app name
+  (exact, then longest substring). The frontmost app is read off a 300ms cache,
+  so a keypress is a dict lookup and no profiles means no OS lookup at all. A
+  `hold` pressed in one app still releases cleanly if you switch mid-hold.
+- **Layers** (`layer` action + `layers`): hold a key for a second binding set,
+  Fn-style. Precedence is layer over profile over base. This is what gives the
+  pointer its click back and puts `/effort` on a held layer without either
+  stealing the other. A stuck layer cannot latch on (reuses the hold safety).
+- **Tap-to-click on the joystick**: a quick stick tap is a left click, making
+  the pointer a full trackpad. A tap must return to centre within 0.2s and move
+  the cursor under 30px, so a fast move never clicks. On by default in pointer
+  mode.
+- **New terminal on an empty Agent Key**: pressing a dark key (no project) opens
+  a new terminal window instead of doing nothing. On by default; disable with
+  `terminal_app: false`.
+
 ## [0.2.0] - 2026-07-26
 
 A batch of lighting and awareness features, plus a joystick fix.
@@ -340,6 +362,7 @@ The layers that predate the hardware work, and are still the backbone:
 - **There is no preset trust check yet.** A config you did not write is a
   program you did not read - see `docs/SECURITY-MODEL.md`.
 
+[0.3.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.3.0
 [0.2.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.2.0
 [0.1.2]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.2
 [0.1.1]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.1
