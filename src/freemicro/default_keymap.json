@@ -219,7 +219,12 @@
         "ArrowUp (docs/FACTORY-DEFAULTS.md 5). Arrows move the selection in",
         "any Claude Code picker - including a permission prompt - and walk",
         "prompt history otherwise, so one detent is always exactly one step",
-        "and nothing can be submitted by accident."
+        "and nothing can be submitted by accident.",
+        "Want the dial to control reasoning EFFORT instead? Claude Code's",
+        "/effort slider is driven by LEFT/RIGHT, so set ENC_CW to \"right\",",
+        "ENC_CC to \"left\", and ENC_CLK to {\"action\":\"text\",\"text\":\"/effort\",",
+        "\"submit\":true} to open it. Turn to adjust, press Enter to keep it, do",
+        "not press the dial again (that re-types /effort)."
       ]
     },
     "ENC_CC": {
