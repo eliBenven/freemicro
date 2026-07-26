@@ -581,3 +581,97 @@ def test_daemon_status_notes_the_onconnect_agent_when_it_is_installed(
     out = capsys.readouterr().out
     assert "on-connect agent is installed" in out
     assert "status --on-connect" in out
+
+
+# ---------------------------------------------------------------------------
+# off-pad alerts: the `alerts` command and the render-loop hook
+# ---------------------------------------------------------------------------
+
+def test_alerts_command_shows_off_by_default(capsys):
+    assert cli.cmd_alerts(Namespace(test=False)) == 0
+    out = capsys.readouterr().out
+    assert "OFF" in out
+    assert "alerts --test" in out
+
+
+def test_alerts_command_shows_configured_block(monkeypatch, capsys):
+    from freemicro.config import Config
+
+    monkeypatch.setattr(Config, "load", classmethod(lambda cls, *a, **k: Config(
+        raw={"alerts": {"sound": {"waiting": "Ping"}, "notify": ["waiting"]}},
+    )))
+    assert cli.cmd_alerts(Namespace(test=False)) == 0
+    out = capsys.readouterr().out
+    assert "ON" in out
+    assert "waiting" in out and "Ping" in out
+
+
+def test_alerts_test_dry_run_lists_every_default_channel(capsys):
+    assert cli.cmd_alerts(Namespace(test=True, dry_run=True, gap=0.0)) == 0
+    out = capsys.readouterr().out
+    # Defaults are exercised even with no config, so a new user can hear them.
+    assert "afplay /System/Library/Sounds/Glass.aiff" in out
+    assert "afplay /System/Library/Sounds/Ping.aiff" in out
+    assert "display notification" in out
+
+
+def test_alerts_test_spawns_through_the_injected_runner(monkeypatch):
+    calls = []
+    import freemicro.alerts as alerts_mod
+
+    monkeypatch.setattr(alerts_mod, "spawn", lambda argv: calls.append(list(argv)))
+    assert cli.cmd_alerts(Namespace(test=True, dry_run=False, gap=0.0)) == 0
+    # Every default sound and notify fired through spawn, none skipped.
+    assert any(c[0] == "afplay" for c in calls)
+    assert any(c[0] == "osascript" for c in calls)
+
+
+def test_alert_project_prefers_the_winning_sessions_folder():
+    from freemicro.state.engine import SessionState
+
+    sessions = [
+        SessionState("s1", AgentState.WORKING, 2.0, cwd="/Users/x/other"),
+        SessionState("s2", AgentState.WAITING, 1.0, cwd="/Users/x/myrepo"),
+    ]
+    assert cli._alert_project(sessions, AgentState.WAITING) == "myrepo"
+
+
+def test_alert_project_is_empty_when_nothing_matches():
+    assert cli._alert_project([], AgentState.WAITING) == ""
+
+
+class _RecordingAlerter:
+    def __init__(self):
+        self.calls = []
+
+    def alert(self, state, previous=None, *, project=""):
+        self.calls.append((state, previous, project))
+
+
+def test_the_render_loop_fires_the_alerter_on_a_transition(monkeypatch, tmp_path):
+    """The hook point: when the resolved state changes, the alerter is called."""
+    import freemicro.device as device_mod
+    from freemicro.state.engine import StateStore, TerminalInfo
+
+    # Seed a waiting session so the very first tick resolves to WAITING.
+    store = StateStore(directory=config_home() / "state")
+    store.update("sess", AgentState.WAITING, cwd="/Users/x/myrepo",
+                 terminal=TerminalInfo())
+
+    monkeypatch.setattr(cli, "_open_pad", lambda *a, **k: _StubDevice())
+
+    def fake_reconnect(handle, on_tick, on_connect, on_disconnect,
+                       tick_interval, seconds):
+        on_tick()   # one tick is enough to cross None -> waiting
+
+    monkeypatch.setattr(device_mod, "run_with_reconnect", fake_reconnect)
+
+    alerter = _RecordingAlerter()
+    args = Namespace(config=None, dry_run=True, interval=1.0, seconds=0.0,
+                     take_pad=True, no_restart=True, verbose=False)
+    assert cli._run_pipeline(args, headless=False, alerter=alerter) == 0
+
+    assert alerter.calls, "alerter was never called on the transition"
+    state, _prev, project = alerter.calls[0]
+    assert state == AgentState.WAITING
+    assert project == "myrepo"

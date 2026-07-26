@@ -674,6 +674,90 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _alerts_show(ac) -> None:
+    """Print the current alert configuration, or that there is none."""
+    from freemicro import alerts
+
+    if not ac.enabled:
+        print("Off-pad alerts: OFF (the default - no `alerts` block in your "
+              "config).")
+        print("\nTurn them on by adding to ~/.freemicro/config.json:")
+        print('  "alerts": {')
+        pairs = ", ".join(f'"{s}": "{n}"' for s, n in alerts.DEFAULT_SOUNDS.items())
+        print(f'    "sound": {{{pairs}}},')
+        notify = ", ".join(f'"{s}"' for s in alerts.DEFAULT_NOTIFY)
+        print(f'    "notify": [{notify}]')
+        print("  }")
+        print("\nThen confirm it works:  freemicro alerts --test")
+        return
+    print("Off-pad alerts: ON")
+    if ac.sounds:
+        print("  sound:")
+        for state, name in ac.sounds.items():
+            path = alerts.sound_path(name)
+            mark = "" if path.exists() else "   (file not found - will be silent)"
+            print(f"    {state:8} {name}{mark}")
+    else:
+        print("  sound:  none configured")
+    if ac.notify:
+        print(f"  notify: {', '.join(ac.notify)}")
+    else:
+        print("  notify: none configured")
+    print(f"  debounce: {ac.debounce_seconds:g}s between repeats of one alert")
+
+
+def cmd_alerts(args: argparse.Namespace) -> int:
+    """Show the alert config, or ``--test`` it so you can hear/see it fire.
+
+    ``--test`` is the one way to confirm sound and notifications work before
+    trusting them, and - the first time - to surface the macOS permission prompt
+    that a notification needs. It fires every configured channel (or the shipped
+    defaults if you have not configured anything yet), ignoring the debounce so
+    you actually get one of each.
+    """
+    from freemicro import alerts
+
+    cfg = Config.load()
+    ac = alerts.AlertConfig.from_raw(cfg.raw)
+    if not args.test:
+        _alerts_show(ac)
+        return 0
+
+    for note in alerts.diagnostics():
+        print(f"  ! {note}")
+
+    sounds = ac.sounds if ac.sounds else dict(alerts.DEFAULT_SOUNDS)
+    notify = ac.notify if ac.notify else alerts.DEFAULT_NOTIFY
+    source = "your config" if ac.enabled else "the built-in defaults (alerts off)"
+    print(f"Testing off-pad alerts from {source}. "
+          "Watch for a banner and listen for each sound.\n")
+
+    runner = (lambda argv: print(f"  would run: {' '.join(argv)}")) \
+        if args.dry_run else alerts.spawn
+
+    for state, name in sounds.items():
+        path = alerts.sound_path(name)
+        if not args.dry_run and not path.exists():
+            print(f"  sound {state:8} {name} - file not found ({path}), skipping")
+            continue
+        print(f"  sound {state:8} {name}")
+        runner(["afplay", str(path)])
+        if not args.dry_run:
+            time.sleep(args.gap)
+
+    for state in notify:
+        title, body = alerts.notification_text(state, project="freemicro")
+        print(f"  notify {state:8} {title!r}: {body!r}")
+        runner(["osascript", "-e", alerts._display_notification(title, body)])
+        if not args.dry_run:
+            time.sleep(args.gap)
+
+    print("\nIf a banner did not appear, macOS may be asking for permission the")
+    print("first time - approve Script Editor/your terminal under System "
+          "Settings\n→ Notifications, then run this again.")
+    return 0
+
+
 def cmd_daemon(args: argparse.Namespace) -> int:
     """Manage the LaunchAgent that keeps FreeMicro alive without a terminal."""
     from freemicro import daemon
@@ -1986,11 +2070,44 @@ def cmd_run(args: argparse.Namespace) -> int:
     return result
 
 
+def _alert_project(sessions, state: AgentState) -> str:
+    """A short project name for an alert about ``state``, or ``""``.
+
+    The winning session is the one whose state matches the resolved state, most
+    recent first (``sessions`` arrives freshest-first). Its folder basename is
+    the friendliest label - the same thing an Agent Key stands for - falling back
+    to its title. Best effort: an empty string just yields a generic banner.
+    """
+    try:
+        for session in sessions:
+            if session.state != state:
+                continue
+            cwd = getattr(session, "cwd", "") or ""
+            if cwd:
+                name = Path(cwd).name
+                if name:
+                    return name
+            title = getattr(session, "title", "") or ""
+            if title:
+                return title
+            return ""
+    except Exception:  # noqa: BLE001 - a label must never break the loop
+        return ""
+    return ""
+
+
 def _run_pipeline(
-    args: argparse.Namespace, headless: bool = False, watcher=None
+    args: argparse.Namespace, headless: bool = False, watcher=None, alerter=None
 ) -> int:
-    """The shared keys-in/lights-out loop behind ``run`` and the daemon."""
+    """The shared keys-in/lights-out loop behind ``run`` and the daemon.
+
+    ``alerter`` fires the off-pad sound and notification on a state transition.
+    It is injectable so a test can assert what would be played or posted without
+    making a sound; ``None`` builds one from the user's config, which is off
+    unless an ``alerts`` block opts in.
+    """
     from freemicro import staleness
+    from freemicro.alerts import Alerter
     from freemicro.device import close_shared, run_with_reconnect
     from freemicro.input.actions import RecordingBackend, best_backend
     from freemicro.input.bridge import Bridge, JoystickTracker
@@ -2009,6 +2126,12 @@ def _run_pipeline(
     if pad is None:
         return 2
     store = _store(cfg)
+    # Off-pad alerts, read from the already-loaded config in the least invasive
+    # way: the alerts block lives in the same config.json the rest of the runtime
+    # reads, so it arrives whole on `cfg.raw` and needs no new parsing anywhere
+    # else. Off unless the user opted in; a disabled alerter is a no-op.
+    if alerter is None:
+        alerter = Alerter.from_config(cfg.raw)
     verbose = bool(getattr(args, "verbose", False))
     # Defends our colours against the other app writing them, and reloads the
     # config in place when it changes. Costs one clock read per key event.
@@ -2184,6 +2307,11 @@ def _run_pipeline(
             # renderer ever delivered, and it is the only thing that tells you
             # the loop is alive on a machine whose pad is unplugged.
             _print_state(state)
+            # The same transition point the LEDs light on is where the off-pad
+            # alerts fire. Fire-and-forget and debounced inside the alerter, so
+            # this cannot stall the loop and a flap cannot spam banners; a no-op
+            # when the user has not opted in.
+            alerter.alert(state, last, project=_alert_project(sessions, state))
             last = state
         if headless and time.time() - housekeeping[0] > 300:
             # launchd holds this log open for the life of the job, so nothing
@@ -2446,6 +2574,19 @@ def build_parser() -> argparse.ArgumentParser:
     dm.add_argument("--step", type=float, default=1.5, help="seconds per state")
     dm.add_argument("--loops", type=int, default=1, help="how many times to cycle")
     dm.set_defaults(func=cmd_demo)
+
+    al = sub.add_parser(
+        "alerts", help="show or test off-pad sound and notifications"
+    )
+    al.add_argument("--test", action="store_true",
+                    help="fire each configured alert (or the defaults) so you "
+                         "can confirm sound and notifications work")
+    al.add_argument("--dry-run", action="store_true",
+                    help="with --test, print what would fire without making a "
+                         "sound or a banner")
+    al.add_argument("--gap", type=float, default=1.2,
+                    help="seconds between test alerts, so they do not overlap")
+    al.set_defaults(func=cmd_alerts)
 
     return p
 
