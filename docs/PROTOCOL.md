@@ -69,6 +69,46 @@ match VID/PID -> `IOHIDDeviceCreate` -> `IOHIDDeviceOpen` ->
 `IOHIDDeviceRegisterInputReportCallback` / `IOHIDDeviceSetReport`.
 Requires **Input Monitoring** permission.
 
+### HID Report Map
+
+The full report descriptor, read from a real unit over Bluetooth LE (216 bytes;
+USB adds a trailing FEATURE item to reach 275). Recovered 2026-07-26 via
+`ioreg -r -c IOHIDDevice -l` (the `ReportDescriptor` property), and included
+here because it is a plain interface fact, like the rest of this document.
+
+```
+05010906a1018501050719e029e71500250175019508810295017508810195057501
+050819012905910295017503910195067508150025a40507190029a48100c0050c09
+01a101850275109501150026ff0719002aff078100c00902a10185030901a1000509
+19012905150025019505750181029501750381010501093009311581257f95027508
+810609381581257f950175088106050c0a38021581257f950175088106c0c00600ff
+0901a10185060902150026ff007508953f81020903150026ff007508953f91020904
+150026ff007508953fb102c0
+```
+
+Decoded:
+
+```
+Report ID 1  Boot Keyboard (Generic Desktop / Keyboard)
+             8 modifier bits, 1 reserved byte, 5 LED output bits + 3 pad,
+             6-byte key array (usages 0x00-0xA4)
+Report ID 2  Consumer Control: one 16-bit usage (0x000-0x7FF)
+Report ID 3  Mouse (Pointer): 5 buttons + 3 pad, X/Y/Wheel signed 8-bit
+             relative, plus Consumer AC Pan (0x238)
+Report ID 6  Vendor-Defined, Usage Page 0xFF00  <-- the channel FreeMicro uses
+             Input  (usage 0x02): 63 bytes, 0-255
+             Output (usage 0x03): 63 bytes
+             Feature(usage 0x04): 63 bytes
+```
+
+**The load-bearing fact for anyone writing compatible firmware:** the standard
+keyboard, consumer and mouse collections exist, but on this firmware the Agent
+keys, action keys, dial and joystick do **not** emit reports through them. Every
+input arrives, and every LED/RGB and `device.status` command is accepted, over
+**Report ID 6** as the JSON-RPC protocol documented below. A firmware that
+implements only the boot keyboard would produce a device the host software
+cannot read.
+
 ## Device -> host notifications
 
 | Method | Params | Meaning |
