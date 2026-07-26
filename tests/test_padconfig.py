@@ -543,3 +543,146 @@ def test_a_config_with_no_chords_gains_nothing_to_go_wrong():
     pad = load_default()
     assert pad.chords == {}
     assert pad.chord_partners("AG00") == ()
+
+
+# ---------------------------------------------------------------------------
+# Software blink effect
+# ---------------------------------------------------------------------------
+
+def _lit(**lighting):
+    base = {"version": 1, "bindings": {"AG00": "hi"}, "lighting": lighting}
+    return parse(base).lighting
+
+
+def test_blink_parses_as_solid_plus_a_flag():
+    light = _lit(states={"error": {"color": "#FF0033", "effect": "blink"}}).for_state(
+        AgentState.ERROR
+    )
+    from freemicro.device.lighting import EFFECTS
+
+    assert light.blink is True
+    # It is stored as solid: there is no firmware blink to store.
+    assert light.effect == EFFECTS["solid"]
+    assert "blink" in light.describe()
+
+
+def test_a_plain_effect_never_looks_like_blink():
+    light = _lit(states={"idle": {"color": "#FFFFFF", "effect": "breath"}}).for_state(
+        AgentState.IDLE
+    )
+    assert light.blink is False
+
+
+def test_an_activity_light_can_blink():
+    pad = parse({
+        "version": 1,
+        "bindings": {"ACT10": {"action": "hold", "key": "ctrl+cmd+o",
+                               "light": {"color": "#FF0033", "effect": "blink"}}},
+        "lighting": {"enabled": True},
+    })
+    assert pad.bindings["ACT10"].light.blink is True
+
+
+# ---------------------------------------------------------------------------
+# Named themes
+# ---------------------------------------------------------------------------
+
+def test_a_theme_supplies_state_colours():
+    from freemicro.padconfig import THEMES
+
+    lighting = _lit(theme="nord")
+    for state in (AgentState.IDLE, AgentState.WORKING, AgentState.ERROR):
+        assert lighting.light_for(state) == THEMES["nord"][state]
+
+
+def test_an_explicit_state_still_beats_the_theme():
+    lighting = _lit(theme="nord", states={"error": {"color": "#123456"}})
+    assert lighting.light_for(AgentState.ERROR).color == 0x123456
+    # ...while the states the override leaves alone still come from the theme.
+    from freemicro.padconfig import THEMES
+
+    assert lighting.light_for(AgentState.IDLE) == THEMES["nord"][AgentState.IDLE]
+
+
+def test_no_theme_falls_back_to_the_factory_palette():
+    from freemicro.padconfig import factory_light
+
+    lighting = _lit()
+    assert lighting.light_for(AgentState.WAITING) == factory_light(AgentState.WAITING)
+
+
+def test_the_high_contrast_theme_leans_on_effects_not_only_hue():
+    from freemicro.padconfig import THEMES
+
+    palette = THEMES["high-contrast"]
+    # error blinks, waiting breathes: state told apart without seeing colour.
+    assert palette[AgentState.ERROR].blink is True
+    assert palette[AgentState.WAITING].effect != palette[AgentState.IDLE].effect
+
+
+def test_an_unknown_theme_is_a_hard_error():
+    with pytest.raises(PadConfigError) as exc:
+        _lit(theme="dracula")
+    assert "theme" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# Flash on entry
+# ---------------------------------------------------------------------------
+
+def test_flash_on_defaults_to_the_two_alert_states():
+    lighting = _lit()
+    assert lighting.flash_on == (AgentState.WAITING, AgentState.ERROR)
+    assert lighting.flashes is True
+
+
+def test_flash_on_can_be_narrowed_or_turned_off():
+    assert _lit(flash_on=["error"]).flash_on == (AgentState.ERROR,)
+    assert _lit(flash_on=[]).flash_on == ()
+    assert _lit(flash_on=False).flash_on == ()
+    assert _lit(flash_on="off").flash_on == ()
+    assert _lit(flash_on=[]).flashes is False
+
+
+def test_flash_on_rejects_an_unknown_state():
+    with pytest.raises(PadConfigError):
+        _lit(flash_on=["exploded"])
+
+
+# ---------------------------------------------------------------------------
+# Battery cue
+# ---------------------------------------------------------------------------
+
+def test_battery_is_off_by_default():
+    battery = _lit().battery
+    assert battery.enabled is False
+    assert battery.threshold == 15
+    assert battery.zone == "underglow"
+
+
+def test_battery_reads_its_fields():
+    battery = _lit(battery={
+        "enabled": True, "threshold": 25, "zone": "agent_keys",
+        "color": "#FF0000", "effect": "blink", "poll_seconds": 120,
+    }).battery
+    assert battery.enabled is True
+    assert battery.threshold == 25
+    assert battery.zone == "agent_keys"
+    assert battery.blink is True
+    assert battery.poll_seconds == 120
+    assert battery.light().color == 0xFF0000
+
+
+def test_battery_threshold_must_be_a_percent():
+    with pytest.raises(PadConfigError):
+        _lit(battery={"threshold": 250})
+
+
+def test_battery_poll_must_be_positive():
+    with pytest.raises(PadConfigError):
+        _lit(battery={"poll_seconds": 0})
+
+
+def test_battery_rejects_unknown_fields():
+    with pytest.raises(PadConfigError):
+        _lit(battery={"enabld": True})

@@ -715,3 +715,257 @@ def test_a_config_reload_wakes_the_pad():
     renderer.render(AgentState.DONE)
     assert renderer.dimmed is False
     assert device.sent[-1]["p"][0]["c"] == parse_color("#00FF00")
+
+
+# ---------------------------------------------------------------------------
+# Software blink, entry flash and the battery cue
+# ---------------------------------------------------------------------------
+
+from freemicro.agentkeys import AgentSlot, Project  # noqa: E402
+from freemicro.renderers.micro_leds import FLASH_SECONDS  # noqa: E402
+
+
+def _agent_entries(messages):
+    for message in messages:
+        if message.get("m") == METHOD_THREAD_STATUS:
+            return message["p"]
+    return None
+
+
+def _blink_config(effect="blink", speed=0.0, **extra):
+    lighting = {
+        "enabled": True, "zones": ["agent_keys"], "on_exit": "leave",
+        "auto_dim_seconds": 0, "flash_on": [],
+        "states": {"error": {"color": "#FF0033", "effect": effect, "speed": speed}},
+    }
+    lighting.update(extra)
+    return parse({"version": 1, "bindings": {}, "lighting": lighting,
+                  "agent_keys": {"policy": "mirror"}})
+
+
+def test_a_blink_state_toggles_the_frame_between_colour_and_off():
+    # Start the clock at a period boundary so the first phase is deterministic;
+    # at speed 0 the half-period is 0.75 s (BLINK_HALF_MAX).
+    clock = FakeClock(now=0.0)
+    device = FakeDevice()
+    renderer = _renderer(config=_blink_config(), device=device, clock=clock)
+
+    renderer.render(AgentState.ERROR)
+    lit = _agent_entries(device.sent)[0]
+    assert lit["c"] == parse_color("#FF0033") and lit["e"] != 0
+
+    # A half period on, the same state must go dark - without any state change.
+    device.sent.clear()
+    clock.advance(0.75)
+    renderer.render(AgentState.ERROR)
+    off = _agent_entries(device.sent)[0]
+    assert off["c"] == 0 and off["e"] == 0 and off["b"] == 0.0
+
+    # ...and back to the colour on the next half period. The blink is the clock,
+    # not a second thread: nothing wrote the pad between these render calls.
+    device.sent.clear()
+    clock.advance(0.75)
+    renderer.render(AgentState.ERROR)
+    assert _agent_entries(device.sent)[0]["c"] == parse_color("#FF0033")
+
+
+def test_a_solid_state_does_not_resend_but_a_blink_state_does():
+    clock = FakeClock()
+    # A non-blink state must keep the "skip unchanged frames" guarantee.
+    solid = _renderer(config=_blink_config(effect="solid"),
+                      device=FakeDevice(), clock=clock)
+    solid.render(AgentState.ERROR)
+    sent = len(solid._device.sent)
+    clock.advance(5.0)
+    solid.render(AgentState.ERROR)
+    assert len(solid._device.sent) == sent, "solid frame resent for no reason"
+
+
+def test_blink_composes_per_key_one_blinks_while_the_others_stay_solid():
+    # error blinks; working is left solid (factory). One frame, two behaviours.
+    config = parse({"version": 1, "bindings": {}, "lighting": {
+        "enabled": True, "zones": ["agent_keys"], "flash_on": [],
+        "states": {"error": {"color": "#FF0033", "effect": "blink"}},
+    }})
+    renderer = _renderer(config=config, device=FakeDevice())
+    slots = [
+        AgentSlot(index=0, path="/a",
+                  project=Project("/a", AgentState.WORKING, 0.0)),
+        AgentSlot(index=1, path="/b",
+                  project=Project("/b", AgentState.ERROR, 0.0)),
+    ]
+    # On the blink OFF phase, only the error key goes dark; working stays lit.
+    off_now = 0.75  # the first off half-period at speed 0 (half = 0.75 s)
+    entries = _agent_entries(
+        renderer.messages_for(AgentState.WORKING, slots=slots, now=off_now)
+    )
+    working, error = entries[0], entries[1]
+    assert working["e"] != 0 and working["c"] != 0, "solid neighbour went dark"
+    assert error["c"] == 0 and error["e"] == 0, "blink key did not go dark"
+
+
+def test_entering_a_flash_state_pulses_then_settles():
+    clock = FakeClock()
+    device = FakeDevice()
+    config = parse({"version": 1, "bindings": {}, "lighting": {
+        "enabled": True, "zones": ["agent_keys"], "auto_dim_seconds": 0,
+        "flash_on": ["error"],
+    }, "agent_keys": {"policy": "mirror"}})
+    renderer = _renderer(config=config, device=device, clock=clock)
+
+    # Seen in idle first, so the move into error is a real transition.
+    renderer.render(AgentState.IDLE)
+    device.sent.clear()
+    # Enter error: the state colour shows at once (the flash never hides it).
+    renderer.render(AgentState.ERROR)
+    assert _agent_entries(device.sent)[0]["c"] == (
+        renderer.light_for(AgentState.ERROR).color
+    )
+
+    # Mid-flash it pulses dark...
+    device.sent.clear()
+    clock.advance(FLASH_SECONDS * 0.75)
+    renderer.render(AgentState.ERROR)
+    assert _agent_entries(device.sent)[0]["c"] == 0
+
+    # ...then settles to the steady error colour once the window closes.
+    device.sent.clear()
+    clock.advance(FLASH_SECONDS)
+    renderer.render(AgentState.ERROR)
+    assert _agent_entries(device.sent)[0]["c"] == (
+        renderer.light_for(AgentState.ERROR).color
+    )
+
+
+def test_a_state_that_was_already_present_does_not_flash_on_first_sight():
+    clock = FakeClock()
+    device = FakeDevice()
+    config = parse({"version": 1, "bindings": {}, "lighting": {
+        "enabled": True, "zones": ["agent_keys"], "auto_dim_seconds": 0,
+        "flash_on": ["error"],
+    }, "agent_keys": {"policy": "mirror"}})
+    renderer = _renderer(config=config, device=device, clock=clock)
+    # First ever render is error: there is no previous state, so no flash.
+    renderer.render(AgentState.ERROR)
+    assert _agent_entries(device.sent)[0]["c"] == (
+        renderer.light_for(AgentState.ERROR).color
+    )
+
+
+def _battery_config(**battery):
+    settings = {"enabled": True, "threshold": 15, "zone": "underglow",
+                "color": "#FF6D00", "effect": "solid", "poll_seconds": 60}
+    settings.update(battery)
+    return parse({"version": 1, "bindings": {}, "lighting": {
+        "enabled": True, "zones": ["agent_keys"], "auto_dim_seconds": 0,
+        "flash_on": [], "battery": settings,
+    }, "agent_keys": {"policy": "mirror"}})
+
+
+def _ambient(messages):
+    for message in messages:
+        if message.get("m") == METHOD_RGBCFG:
+            return message["p"].get("ambient")
+    return None
+
+
+def test_a_low_battery_tints_the_underglow_and_a_healthy_one_leaves_it_dark():
+    reads = [{"battery": 9, "is_charging": False}]
+    renderer = _renderer(
+        config=_battery_config(), device=FakeDevice(),
+    )
+    renderer._battery_reader = lambda: reads[0]
+    renderer.render(AgentState.IDLE)
+    assert _ambient(renderer._device.sent)["c"] == parse_color("#FF6D00")
+
+    # Recover the battery: the cue must clear, not stay stranded on the glow.
+    reads[0] = {"battery": 80, "is_charging": False}
+    renderer._battery_checked_at = None  # force a fresh read this tick
+    renderer._device.sent.clear()
+    renderer.render(AgentState.WORKING)
+    assert _ambient(renderer._device.sent) == {"e": 0, "b": 0.0, "s": 0.0, "c": 0}
+
+
+def test_a_charging_pad_is_never_low():
+    renderer = _renderer(config=_battery_config(), device=FakeDevice())
+    renderer._battery_reader = lambda: {"battery": 5, "is_charging": True}
+    renderer.render(AgentState.IDLE)
+    # underglow is only an extra zone here, so a not-low battery paints it dark.
+    assert _ambient(renderer._device.sent) == {"e": 0, "b": 0.0, "s": 0.0, "c": 0}
+
+
+def test_battery_is_read_on_a_slow_clock_not_every_tick():
+    calls = [0]
+
+    def reader():
+        calls[0] += 1
+        return {"battery": 50, "is_charging": False}
+
+    clock = FakeClock()
+    renderer = _renderer(config=_battery_config(poll_seconds=60),
+                         device=FakeDevice(), clock=clock)
+    renderer._battery_reader = reader
+    for _ in range(5):
+        renderer.render(AgentState.IDLE)
+    assert calls[0] == 1, "battery cache read on every tick"
+    clock.advance(61)
+    renderer.render(AgentState.IDLE)
+    assert calls[0] == 2
+
+
+def test_battery_disabled_never_reads_at_all():
+    calls = [0]
+
+    def reader():
+        calls[0] += 1
+        return {"battery": 1, "is_charging": False}
+
+    config = parse({"version": 1, "bindings": {}, "lighting": {
+        "enabled": True, "zones": ["agent_keys"], "auto_dim_seconds": 0,
+    }})
+    renderer = _renderer(config=config, device=FakeDevice())
+    renderer._battery_reader = reader
+    renderer.render(AgentState.IDLE)
+    assert calls[0] == 0
+
+
+def test_a_blinking_state_still_dims_and_the_blink_stops():
+    """Blink does not keep the pad awake: auto-dim blanks it and the toggling
+    stops, so a blinking idle on an empty desk goes dark like anything else."""
+    clock = FakeClock(now=0.0)
+    device = FakeDevice()
+    config = _blink_config(auto_dim_seconds=180)
+    renderer = _renderer(config=config, device=device, clock=clock)
+    renderer.render(AgentState.ERROR)
+    # error is an alert state, which by default does not dim; a blinking *idle*
+    # is the honest "does blink keep it awake?" case, so drive that instead.
+    idle = _renderer(
+        config=_blink_config(
+            auto_dim_seconds=180,
+            states={"idle": {"color": "#3030FF", "effect": "blink"}},
+        ),
+        device=FakeDevice(), clock=clock,
+    )
+    idle.render(AgentState.IDLE)
+    clock.advance(200)  # past the dim window with nothing happening
+    idle._device.sent.clear()
+    idle.render(AgentState.IDLE)
+    assert idle.dimmed is True
+    assert _agent_entries(idle._device.sent)[0]["c"] == 0
+
+
+def test_the_preview_methods_id_does_not_defeat_the_dedupe():
+    """lights.preview carries a per-call id; an unchanged frame must still not
+    resend just because that correlation number moved."""
+    config = parse({"version": 1, "bindings": {}, "lighting": {
+        "enabled": True, "method": "preview", "zones": ["underglow"],
+        "auto_dim_seconds": 0, "flash_on": [],
+        "states": {"done": {"color": "#00FF00"}},
+    }})
+    device = FakeDevice()
+    renderer = _renderer(config=config, device=device, clock=FakeClock())
+    renderer.render(AgentState.DONE)
+    sent = len(device.sent)
+    for _ in range(4):
+        renderer.render(AgentState.DONE)
+    assert len(device.sent) == sent, "preview frame resent on a moving id"

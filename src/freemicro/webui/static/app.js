@@ -401,12 +401,23 @@ function peekZones() {
   const zones = peekLighting().zones;
   return Array.isArray(zones) && zones.length ? zones : ['agent_keys'];
 }
+function themeLight(theme, name) {
+  const hit = (S.schema.themes || []).find((t) => t.name === theme);
+  const state = hit && hit.states && hit.states[name];
+  return (state && typeof state === 'object') ? state : null;
+}
 function peekLight(name) {
-  const states = peekLighting().states;
-  const light = states && states[name];
+  const l = peekLighting();
+  const light = l.states && l.states[name];
   if (light && typeof light === 'object') return light;
-  // Not configured: show the factory colour, which is roughly what the
-  // renderer's fallback palette does anyway.
+  // Not configured: resolve exactly as the renderer would - the named theme
+  // first, then the factory palette. That way the pad diagram matches what the
+  // hardware will show, theme and all.
+  const themed = l.theme ? themeLight(l.theme, name) : null;
+  if (themed) {
+    return { color: themed.hex, effect: themed.effect || 'solid',
+             brightness: 1, speed: 0, _missing: true };
+  }
   const preset = (S.schema.presets || []).find((p) => p.state === name);
   return { color: preset ? preset.hex : '#FFFFFF', effect: 'solid',
            brightness: 1, speed: 0, _missing: true };
@@ -2253,6 +2264,30 @@ function renderAdvanced() {
     ? S.doc.joystick : {};
 
   mount(host,
+    el('h3', { text: 'Colour theme' }),
+    picker({
+      value: l.theme || '',
+      options: [{ value: '', label: 'None (pick each colour yourself)',
+                  hint: 'Falls back to the factory palette' }].concat(
+        (S.schema.themes || []).map((t) => ({
+          value: t.name, label: t.label,
+          hint: t.name === 'high-contrast'
+            ? 'colourblind-friendly: a distinct effect per state, not hue alone'
+            : 'a named palette for all five states',
+          terms: t.name + ' ' + t.label,
+        }))),
+      search: 'Search themes',
+      onpick: (value) => {
+        if (value) { lighting().theme = value; } else { delete lighting().theme; }
+        changed();
+        renderPad();
+        renderHome();
+      },
+    }),
+    el('p', { class: 'hint' },
+      'A theme sets all five state colours at once. Any colour you set yourself ' +
+      'still wins over it, so a theme is a starting point, not a cage.'),
+
     el('h3', { text: 'Sharing the pad' }),
     toggle(peekZones().includes('backlight') && !peekZones().includes('agent_keys'),
       'Leave the Agent Keys to the ChatGPT app',
@@ -2346,6 +2381,7 @@ const EFFECT_HELP = {
   'breath': 'fades all the way in and out',
   'gradient': 'blends across the strip',
   'shallow-breath': 'a gentle pulse, half to full brightness',
+  'blink': 'hard on/off, in software - a redundant channel for colourblind eyes',
 };
 const animated = (light) =>
   !['off', 'solid'].includes(effectName(light.effect));

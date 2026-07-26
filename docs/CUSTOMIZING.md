@@ -514,9 +514,12 @@ quit anything to run FreeMicro - see
 |---|---|
 | `zones` | `backlight` (under the keycaps), `underglow` (base strip), `agent_keys` (the six top keys, set individually) |
 | `color` | `"#RRGGBB"`, `"#f0a"`, `"0xRRGGBB"`, `[r, g, b]`, or a packed integer |
-| `effect` | `off`, `solid`, `snake`, `rainbow`, `breath`, `gradient`, `shallow-breath` |
+| `effect` | `off`, `solid`, `snake`, `rainbow`, `breath`, `gradient`, `shallow-breath`, and FreeMicro's own `blink` (see [Blink](#blink-a-hard-on-off-in-software)) |
 | `brightness`, `speed` | `0` - `1` |
 | `magic` | `0` - 1, an uncharacterized firmware field - exposed for tinkerers |
+| `theme` | A named palette - `factory`, `nord`, `solarized`, `high-contrast` - that sets all five colours at once. See [Colour themes](#colour-themes) |
+| `flash_on` | States whose *entry* plays a brief attention flash. Default `["waiting", "error"]`; `[]` (or `false`) turns it off. See [Attention flash on entry](#attention-flash-on-entry) |
+| `battery` | Reflect a low battery through the lighting. Off by default. See [Low-battery cue](#low-battery-cue) |
 | `on_exit` | `off` (default - blanks the pad and hands it back, like the vendor app does on quit), `breath`, `leave`. Applied however FreeMicro stops: Ctrl-C, `launchctl bootout`, logout, `pkill` |
 | `auto_dim_seconds` | `180` (default, the factory's three minutes). Seconds of inactivity before the pad goes **dark**, not dimmer. `0` (or `"off"`) never dims |
 | `auto_dim_alerts` | `false` (default): `waiting` and `error` stay lit through the timeout. `true` dims them too, which is exactly what the factory does |
@@ -572,6 +575,96 @@ Two factory behaviours worth keeping if you edit these:
   * A key being **held** stops the timer outright, so the pad cannot go dark
     while a `light` is up. Holding a key is the least ambiguous activity there
     is, and the factory's own wake rule is "any HID event".
+
+### Blink: a hard on/off, in software
+
+The firmware has no hard blink - only the smooth `breath`. FreeMicro adds one
+itself. Set `"effect": "blink"` on any state (or any binding `light`) and the
+render loop toggles that light between its colour and off on its own clock; the
+`speed` field sets the rate (0 slowest, 1 fastest).
+
+```json
+"states": { "error": { "color": "#FF0033", "effect": "blink", "speed": 0.5 } }
+```
+
+It is driven by the render loop that already ticks, not a second thread writing
+the LEDs - the lighting code holds exactly one writer - so a blink composes with
+everything else: one Agent Key can blink `error` while the other five sit solid
+on their own projects, and letting a held mic key's layer up or down still works
+frame by frame.
+
+**Blink is an accessibility win, not just decoration.** State on the pad is
+otherwise carried by *hue alone* - amber `waiting` versus green `done`, red
+`error` versus green `done` - which is the classic red/green colourblind trap. A
+distinct effect per state is a **redundant channel**: a key that blinks is
+"error" whether or not you can tell its colour from its neighbour's. The
+`high-contrast` theme below is built entirely on this idea.
+
+Blink does not keep the pad awake: `auto_dim_seconds` still blanks it, and the
+toggling stops when it does, so a blinking light on an empty desk goes dark like
+anything else. (The two states you would most want to blink, `waiting` and
+`error`, already stay awake by default through `auto_dim_alerts`.)
+
+### Colour themes
+
+A `theme` sets all five state colours at once, so you do not hand-pick each:
+
+```json
+"lighting": { "enabled": true, "theme": "nord" }
+```
+
+| Theme | What it is |
+|---|---|
+| `factory` | The palette the pad ships with. `"theme": "factory"` and no theme at all look the same |
+| `nord` | The Nord editor palette (frost and aurora) |
+| `solarized` | Solarized's accent colours |
+| `high-contrast` | A colourblind-friendly palette (Okabe-Ito hues) that leans on a **distinct effect per state**, not hue: `waiting` breathes and `error` blinks, so the two states you least want to miss are told apart without seeing their colour at all |
+
+A theme is a starting point, not a cage: an explicit `states` entry still wins
+per state, and every state a theme does not set (or that no theme is chosen for)
+falls back to the factory colour as before. You can pick a theme from the web
+UI's Lights pane, where the pad diagram repaints in the theme's colours.
+
+### Attention flash on entry
+
+When a key (or the underglow/backlight) *enters* one of the `flash_on` states, it
+plays a brief one-time pulse in that state's own colour - it draws your eye to
+the new state without ever standing in front of it - and then settles into the
+steady look. It fires only on the actual transition, never on every frame and
+never on the first sight of a state at startup.
+
+```json
+"lighting": { "flash_on": ["waiting", "error"] }   // the default
+"lighting": { "flash_on": [] }                      // turn it off
+```
+
+### Low-battery cue
+
+The pad is battery-powered, and FreeMicro can reflect a low battery through the
+lighting. It is **off by default** - the vendor app has no such cue, so this is a
+FreeMicro extra, not factory parity.
+
+```json
+"lighting": {
+  "battery": {
+    "enabled": true,
+    "threshold": 15,          // percent, at or below which the cue shows
+    "zone": "underglow",      // where it lands - the underglow by default
+    "color": "#FF6D00",
+    "effect": "breath",       // a slow pulse; "blink" works too
+    "poll_seconds": 60
+  }
+}
+```
+
+A charging pad is never "low" (the cue is a nudge to plug it in, and it already
+is). The reading is taken from the cached `device.status` value that the menu bar
+and daemon already refresh - **FreeMicro never issues the battery round trip from
+the render loop.** That round trip shares the one vendor channel with the
+lighting writes and key events, and the render loop is already inside one long
+read pump; asking for battery there would fight the very writes it decorates. So
+the cue reads a small cache file on a slow clock (`poll_seconds`, default 60) and
+puts nothing on the channel.
 
 Test a palette by eye:
 

@@ -179,6 +179,58 @@ ALERT_STATES: Tuple[AgentState, ...] = (AgentState.WAITING, AgentState.ERROR)
 #: §1d and §4).
 _DARK = StateLight(color=0, effect=parse_effect("off"), brightness=0.0, speed=0.0)
 
+#: How long an entry flash lasts. Short on purpose - one visible blip, not a
+#: strobe. The flash is a single pulse in the element's *own* colour: on for the
+#: first half, dark for the second, then the steady look. Keeping the flash in
+#: the state's colour (rather than a white overlay) means the new state is
+#: *shown* the instant it is entered - the flash draws the eye to it, it never
+#: stands in front of it - and it needs no sub-tick timing, so it survives a
+#: slow render interval.
+FLASH_SECONDS = 0.4
+
+#: The blink half-period at ``speed`` 0 and 1, in seconds. A blink is a software
+#: effect: the render loop (which already owns the clock and ticks every poll)
+#: recomputes the frame each tick and toggles the affected LEDs between their
+#: colour and off. The floor, 0.30 s, is deliberately above the default render
+#: interval (0.25 s, ``freemicro run --interval``) so even the fastest blink
+#: shows a real off phase; a larger ``--interval`` slows the blink to the tick
+#: rate rather than aliasing it away. No second thread writes the channel - that
+#: is the one rule the lighting code holds, and blink keeps it.
+BLINK_HALF_MAX = 0.75
+BLINK_HALF_MIN = 0.30
+
+
+def _clamp01(value: float) -> float:
+    return 0.0 if value < 0.0 else 1.0 if value > 1.0 else value
+
+
+def _blink_on(speed: float, now: float) -> bool:
+    """Whether a blinking light is in its *on* phase at ``now``.
+
+    The rate comes from ``speed`` alone, so two blinking lights with different
+    speeds keep their own rhythms; the phase comes from the shared clock, so
+    nothing has to be remembered between ticks.
+    """
+    half = BLINK_HALF_MAX - (BLINK_HALF_MAX - BLINK_HALF_MIN) * _clamp01(speed)
+    return int(now // half) % 2 == 0
+
+
+def _default_battery_reader() -> Optional[dict]:
+    """The cached ``device.status`` reading, read as a plain file.
+
+    This is the whole battery seam: a file the menu bar poller (and, when it
+    owns the pad, the daemon) refreshes on its own slow clock. Reading it puts
+    nothing on the vendor channel, so it cannot fight a lighting write or stall
+    the render loop - which matters because the loop is already inside one long
+    ``device.stream`` pump and cannot safely nest the round trip itself.
+    """
+    try:
+        from freemicro.menubar.status import read_status
+
+        return read_status()
+    except Exception:  # noqa: BLE001 - no reading is just "battery unknown"
+        return None
+
 
 _NOTICE_PREFIX = "  [lighting] "
 
@@ -331,6 +383,7 @@ class MicroLedsRenderer(Renderer):
         store: Any = None,
         clock: Callable[[], float] = time.monotonic,
         notify: Optional[Callable[[str], None]] = None,
+        battery_reader: Optional[Callable[[], Optional[dict]]] = None,
     ) -> None:
         # A caller-supplied device is borrowed; otherwise we use (and release)
         # the process-wide shared handle. Either way we never open a second one.
@@ -369,6 +422,18 @@ class MicroLedsRenderer(Renderer):
         #: Frames that actually reached the device. Read by the lighting owner
         #: to tell "we just sent something real" from "nothing happened".
         self._sends = 0
+        #: The state each slot (and the resolved state) was in last tick, so an
+        #: *entry* into a flash state can be told from merely *being* in one.
+        self._prev_state: Optional[AgentState] = None
+        self._prev_slot_states: dict = {}
+        #: flash key -> the clock time its flash ends. "state" is the resolved
+        #: state's zone flash; a slot path is that Agent Key's flash.
+        self._flash_until: dict = {}
+        #: The battery cue, read from the cache on a slow clock (never a device
+        #: round trip - see :func:`_default_battery_reader`).
+        self._battery_reader = battery_reader or _default_battery_reader
+        self._battery_low = False
+        self._battery_checked_at: Optional[float] = None
 
     # -- config -----------------------------------------------------------
 
@@ -541,9 +606,17 @@ class MicroLedsRenderer(Renderer):
         frame = self._frame_key(state, slots, overlay)
         if frame != self._model:
             # A change in the lighting model counts as activity and wakes the
-            # pad, exactly as it does for the vendor app (§4).
+            # pad, exactly as it does for the vendor app (§4). A state entry is
+            # exactly such a change, so this is also where the entry flash is
+            # armed - a blink phase flipping is *not* a model change and rightly
+            # does neither.
             self._model = frame
             self._wake(now)
+            self._note_flash_entries(state, slots, now)
+
+        # A cheap, throttled cache read - never a device round trip. See
+        # _default_battery_reader for why this must not touch the channel.
+        self._refresh_battery(now)
 
         if self._dimmed:
             # Dark is the frame now. Re-send it only if something suggests the
@@ -552,9 +625,24 @@ class MicroLedsRenderer(Renderer):
                 self._dim_asserted = self._send(self._blank_messages())
             return
 
-        if frame != self._frame:
-            if self._send(self.messages_for(state, slots=slots, overlay=overlay)):
-                self._frame = frame
+        # The dedupe compares the *bytes we would send*, not a summary of the
+        # model, because blink, the entry flash and the battery cue all change
+        # the frame while the model is unchanged. Building the frame every tick
+        # is a handful of dicts at 4 Hz; the "skip unchanged frames" guarantee
+        # that keeps animated effects from restarting is preserved exactly -
+        # every half-period a blinking frame genuinely differs, and only then.
+        messages = self.messages_for(state, slots=slots, overlay=overlay, now=now)
+        # The ``lights.preview`` method carries a per-call ``id`` that increments
+        # every build; it is correlation metadata, not part of what the pad
+        # shows, so it is excluded from the dedupe or an unchanged preview frame
+        # would re-send on every tick.
+        key = repr([
+            {k: v for k, v in message.items() if k != "id"}
+            for message in messages
+        ])
+        if key != self._frame:
+            if self._send(messages):
+                self._frame = key
             return
 
         if self._should_dim(state, slots, now):
@@ -748,6 +836,7 @@ class MicroLedsRenderer(Renderer):
         light: Optional[StateLight] = None,
         slots: Optional[Sequence[AgentSlot]] = None,
         overlay: Optional[ActivityLight] = None,
+        now: Optional[float] = None,
     ) -> List[dict]:
         """Every protocol message this state should produce, in send order.
 
@@ -767,19 +856,40 @@ class MicroLedsRenderer(Renderer):
         """
         base = light or self.light_for(state)
         lighting = self.lighting
-        extra = () if light is not None else self._activity_zones()
+        extra = () if light is not None else self._extra_paint_zones()
+        battery = lighting.battery
+        # The battery cue is a state-driven layer, so it only applies to a real
+        # render (a live clock, no explicit ``light`` preview overriding it).
+        show_battery = (
+            light is None and now is not None and self._battery_low
+            and battery.enabled
+        )
+        battery_zone = battery.zone
+        battery_light = battery.light() if show_battery else None
+
+        def eff(base_light: StateLight, flash_key: Optional[str]) -> StateLight:
+            """Resolve the software effects (flash, then blink) for one element.
+
+            ``now is None`` is the preview path: no clock, so nothing animates
+            and the on-phase colour is shown.
+            """
+            if now is None:
+                return base_light
+            return self._effective_look(base_light, flash_key, now)
 
         def look(zone: str) -> Optional[StateLight]:
-            """What this zone shows, or ``None`` if we do not drive it."""
+            """What backlight/underglow shows, or ``None`` if we do not drive it."""
             if overlay is not None and zone in overlay.zones:
-                return overlay
+                return eff(overlay, None)
+            if battery_light is not None and zone == battery_zone:
+                return eff(battery_light, None)
             if zone in lighting.zones:
-                return base
+                return eff(base, "state")
             if zone in extra:
-                # A zone only the layer ever claims. Dark is not a decision
-                # about this frame, it is what "we drive this zone and nothing
-                # is on it" looks like - and it is what the factory sends to the
-                # underglow whenever nothing is happening (§1b).
+                # A zone only a layer (an activity light, or the battery cue)
+                # ever claims. Dark is not a decision about this frame, it is
+                # what "we drive this zone and nothing is on it" looks like - the
+                # same thing the factory sends the underglow when idle (§1b).
                 return _DARK
             return None
 
@@ -787,19 +897,147 @@ class MicroLedsRenderer(Renderer):
         keys, ambient = look(ZONE_BACKLIGHT), look(ZONE_UNDERGLOW)
         if keys is not None or ambient is not None:
             messages.append(self._zone_message(keys, ambient))
-        agent = look(ZONE_AGENT_KEYS)
-        if agent is not None:
-            if agent is base and slots is not None:
-                messages.append(
-                    thstatus_message(self._slot_entry(slot) for slot in slots)
+
+        # Agent keys, resolved with the same precedence but able to go per-slot:
+        # a held-key layer or the battery cue can seize the whole zone, otherwise
+        # it is agent state - one colour per project when we have slots, mirrored
+        # across six when we do not.
+        agent_msg: Optional[dict] = None
+        if overlay is not None and ZONE_AGENT_KEYS in overlay.zones:
+            agent_msg = self._mirror_message(eff(overlay, None))
+        elif battery_light is not None and battery_zone == ZONE_AGENT_KEYS:
+            agent_msg = self._mirror_message(eff(battery_light, None))
+        elif ZONE_AGENT_KEYS in lighting.zones:
+            if slots is not None and light is None:
+                agent_msg = thstatus_message(
+                    self._slot_entry(slot, now) for slot in slots
                 )
             else:
-                messages.append(
-                    all_agent_keys(
-                        agent.color, agent.effect, agent.brightness, agent.speed
-                    )
-                )
+                agent_msg = self._mirror_message(eff(base, "state"))
+        elif ZONE_AGENT_KEYS in extra:
+            agent_msg = self._mirror_message(_DARK)
+        if agent_msg is not None:
+            messages.append(agent_msg)
         return messages
+
+    @staticmethod
+    def _mirror_message(light: StateLight) -> dict:
+        """One look across all six Agent Keys."""
+        return all_agent_keys(
+            light.color, light.effect, light.brightness, light.speed
+        )
+
+    def _effective_look(
+        self, base: StateLight, flash_key: Optional[str], now: float
+    ) -> StateLight:
+        """The look one element actually wears now, after the software effects.
+
+        Flash wins while its brief window is open (a state just entered a
+        flash state): the element shows its colour for the first half of the
+        window and goes dark for the second, one clean pulse that draws the eye
+        to the state it has just entered without hiding it. Otherwise a blinking
+        light is dark on its off phase and its own colour on its on phase.
+        Everything else is unchanged.
+        """
+        until = self._flash_until.get(flash_key) if flash_key is not None else None
+        if until is not None and now < until:
+            elapsed = now - (until - FLASH_SECONDS)
+            return base if elapsed < FLASH_SECONDS / 2.0 else _DARK
+        if base.blink and not _blink_on(base.speed, now):
+            return _DARK
+        return base
+
+    def _extra_paint_zones(self) -> Tuple[str, ...]:
+        """Zones we paint (dark, or lit by a layer) beyond the state zones.
+
+        The activity-light zones, plus the battery cue's zone when it is enabled
+        and lands somewhere the state lighting does not already drive. Being in
+        this set is what makes a zone painted *dark* in an ordinary frame and by
+        auto-dim and on exit, so the battery pulse never gets stranded lit when
+        the battery recovers or the pad blanks.
+        """
+        zones = list(self._activity_zones())
+        battery = self.lighting.battery
+        if battery.enabled:
+            zone = battery.zone
+            if zone not in self.lighting.zones and zone not in zones:
+                zones.append(zone)
+        return tuple(zones)
+
+    # -- software effects: flash on entry, and the battery cue -------------
+
+    def _note_flash_entries(
+        self,
+        state: AgentState,
+        slots: "Optional[Sequence[AgentSlot]]",
+        now: float,
+    ) -> None:
+        """Arm a brief flash for anything that just *entered* a flash state.
+
+        Called only when the lighting model changed, and only ever flashes on an
+        actual transition into a configured state - never on the first sight of
+        a state (there is no previous to compare) and never every render. An
+        empty ``flash_on`` disables it while still tracking the previous states,
+        so turning it on later does not flash retroactively.
+        """
+        flash_on = self.lighting.flash_on
+        if flash_on:
+            if (
+                self._prev_state is not None
+                and state != self._prev_state
+                and state in flash_on
+            ):
+                self._flash_until["state"] = now + FLASH_SECONDS
+            if slots is not None:
+                for slot in slots:
+                    if slot.empty:
+                        continue
+                    was = self._prev_slot_states.get(slot.path)
+                    if (
+                        was is not None
+                        and slot.state != was
+                        and slot.state in flash_on
+                    ):
+                        self._flash_until[slot.path] = now + FLASH_SECONDS
+        self._prev_state = state
+        self._prev_slot_states = (
+            {} if slots is None
+            else {s.path: s.state for s in slots if not s.empty}
+        )
+
+    def _refresh_battery(self, now: float) -> None:
+        """Re-read the cached battery reading, at most every ``poll_seconds``."""
+        battery = self.lighting.battery
+        if not battery.enabled:
+            self._battery_low = False
+            return
+        last = self._battery_checked_at
+        if last is not None and now - last < battery.poll_seconds:
+            return
+        self._battery_checked_at = now
+        self._battery_low = self._read_battery_low(battery)
+
+    def _read_battery_low(self, battery: Any) -> bool:
+        """Whether the cached reading says the battery is low and not charging.
+
+        A charging pad is never "low" for this purpose - the cue is a call to go
+        plug it in, and it is already plugged in. An unreadable or absent
+        reading is not low either: the pad's job is to under-claim, never to cry
+        wolf about a battery it cannot see.
+        """
+        try:
+            data = self._battery_reader()
+        except Exception:  # noqa: BLE001 - a read hiccup keeps the last answer
+            return self._battery_low
+        if not isinstance(data, dict):
+            return False
+        level = data.get("battery")
+        if level is None or bool(data.get("is_charging")):
+            return False
+        try:
+            return int(level) <= battery.threshold
+        except (TypeError, ValueError):
+            return False
 
     def _activity_zones(self) -> Tuple[str, ...]:
         """Zones some binding's light can claim but the state lighting cannot.
@@ -815,19 +1053,25 @@ class MicroLedsRenderer(Renderer):
         zones = self.lighting.zones
         return tuple(zone for zone in claimed if zone not in zones)
 
-    def _slot_entry(self, slot: AgentSlot) -> dict:
+    def _slot_entry(self, slot: AgentSlot, now: Optional[float] = None) -> dict:
         """One ``v.oai.thstatus`` entry for one Agent Key.
 
         An empty slot is **off**, not dim: colour 0, brightness 0, effect 0.
         That is the factory's "no agent assigned" payload
         (``docs/FACTORY-DEFAULTS.md`` §1a), and it is what makes a lit key
         countable - three glowing keys means three live projects.
+
+        ``now`` lets one key blink, or flash on entry, while its five neighbours
+        stay solid: the software effects are resolved per slot here, keyed on the
+        slot's own project path, so they compose with the per-key model instead
+        of fighting it.
         """
         if slot.empty:
             return thread_entry(
                 slot.index, 0, effect="off", brightness=0.0, speed=0.0
             )
-        light = self.light_for(slot.state)
+        base = self.light_for(slot.state)
+        light = base if now is None else self._effective_look(base, slot.path, now)
         return thread_entry(
             slot.index, light.color, light.effect, light.brightness, light.speed
         )
@@ -880,7 +1124,7 @@ class MicroLedsRenderer(Renderer):
         is exactly the stranded colour this feature must not create.
         """
         lighting = lighting if lighting is not None else self.lighting
-        extra = self._activity_zones()
+        extra = self._extra_paint_zones()
         drives = {
             ZONE_BACKLIGHT: lighting.drives_backlight or ZONE_BACKLIGHT in extra,
             ZONE_UNDERGLOW: lighting.drives_underglow or ZONE_UNDERGLOW in extra,
@@ -1039,6 +1283,9 @@ class MicroLedsRenderer(Renderer):
 
 __all__ = [
     "ALERT_STATES",
+    "BLINK_HALF_MAX",
+    "BLINK_HALF_MIN",
+    "FLASH_SECONDS",
     "WRITE_RETRY_BACKOFF",
     "MicroLedsRenderer",
     "release_lighting",

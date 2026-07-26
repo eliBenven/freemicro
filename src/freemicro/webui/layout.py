@@ -293,11 +293,55 @@ def pad_layout() -> Dict[str, Any]:
 
 
 def effect_choices() -> List[Dict[str, Any]]:
-    """Effect ids in firmware order, named the way the config spells them."""
-    return [
+    """Effects the config can spell, firmware ids first then software effects.
+
+    ``blink`` is a FreeMicro-level software effect, not a firmware id (see
+    :func:`freemicro.device.lighting.parse_effect_spec`). The browser stores
+    effects by *name*, so it is offered here by name with a ``soft`` marker and a
+    value that never collides with a firmware id, and the parser turns the saved
+    ``"blink"`` back into solid-plus-a-flag.
+    """
+    from freemicro.device.lighting import SOFTWARE_EFFECTS
+
+    choices = [
         {"value": number, "name": name}
         for name, number in sorted(EFFECTS.items(), key=lambda item: item[1])
     ]
+    top = max(EFFECTS.values())
+    for offset, name in enumerate(SOFTWARE_EFFECTS, start=1):
+        choices.append({"value": top + offset, "name": name, "soft": True})
+    return choices
+
+
+def theme_choices() -> List[Dict[str, Any]]:
+    """The named palettes, each already expanded to its five state colours.
+
+    Shipped whole so the browser can both offer the names and repaint the pad
+    diagram in a theme's colours without a round trip - the same expansion the
+    renderer does at run time via :meth:`LightingConfig.light_for`.
+    """
+    from freemicro.device.lighting import color_to_hex, effect_label
+    from freemicro.padconfig import THEME_NAMES, THEMES
+
+    labels = {
+        "factory": "Factory",
+        "nord": "Nord",
+        "solarized": "Solarized",
+        "high-contrast": "High contrast",
+    }
+    out: List[Dict[str, Any]] = []
+    for name in THEME_NAMES:
+        palette = THEMES[name]
+        states = {
+            state.value: {
+                "hex": color_to_hex(light.color),
+                "effect": effect_label(light.effect, light.blink),
+                "blink": light.blink,
+            }
+            for state, light in palette.items()
+        }
+        out.append({"name": name, "label": labels.get(name, name), "states": states})
+    return out
 
 
 #: The factory palette, offered as one-click presets. Values are the exact
@@ -403,6 +447,7 @@ __all__ = [
     "WIDE_KEYS",
     "agent_policies",
     "effect_choices",
+    "theme_choices",
     "pad_layout",
     "paired_ids",
 ]

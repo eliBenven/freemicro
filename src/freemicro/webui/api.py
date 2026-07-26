@@ -46,6 +46,7 @@ from freemicro.webui.layout import (
     agent_policies,
     effect_choices,
     pad_layout,
+    theme_choices,
 )
 from freemicro.webui.padlink import PadLink
 
@@ -161,6 +162,10 @@ class Api:
         return 200, {
             "actions": actions,
             "effects": effect_choices(),
+            # Named palettes, each already expanded to its five state colours, so
+            # the Lights pane can offer them and repaint the pad in a theme
+            # without a round trip. Explicit per-state colours still win.
+            "themes": theme_choices(),
             "zones": list(ZONES),
             "methods": list(LIGHTING_METHODS),
             "exit_modes": list(EXIT_MODES),

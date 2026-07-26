@@ -472,14 +472,20 @@ class PadLink:
         over either transport. A preview that returns success and lights nothing
         is worse than no preview.
         """
-        from freemicro.device.lighting import parse_color, parse_effect
+        from freemicro.device.lighting import parse_color, parse_effect_spec
         from freemicro.renderers.micro_leds import MicroLedsRenderer
 
+        # ``blink`` is a software effect the firmware has no id for, so a live
+        # preview shows its on-phase (solid) colour: the pad cannot blink from a
+        # single stateless write, and a preview that raised on it would be worse
+        # than one that shows the colour it will blink.
+        effect_id, blink = parse_effect_spec(effect)
         light = StateLight(
             color=parse_color(color),
-            effect=parse_effect(effect),
+            effect=effect_id,
             brightness=float(brightness),
             speed=float(speed),
+            blink=blink,
         )
         config = PadConfig(
             bindings={},

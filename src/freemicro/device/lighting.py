@@ -62,6 +62,14 @@ _EFFECT_ALIASES: Dict[str, str] = {
     "pulse": "shallow-breath",
 }
 
+#: FreeMicro-level effects the *firmware* has no id for. These are driven in
+#: software by the render loop (``freemicro.renderers.micro_leds``), which
+#: toggles what it sends on its own clock. ``parse_effect`` still rejects them,
+#: because they are not firmware ids and must never reach a wire message as one;
+#: :func:`parse_effect_spec` is the seam that separates the two.
+SOFT_BLINK = "blink"
+SOFTWARE_EFFECTS: Tuple[str, ...] = (SOFT_BLINK,)
+
 #: The number of Agent Keys, and therefore of thread-status slots.
 AGENT_KEY_COUNT = 6
 
@@ -96,12 +104,39 @@ def parse_effect(value: Union[str, int]) -> int:
     )
 
 
+def parse_effect_spec(value: Union[str, int]) -> Tuple[int, bool]:
+    """Normalise an effect to ``(firmware id, is-blink)``.
+
+    ``blink`` is a FreeMicro-level effect, not a firmware id: the render loop
+    toggles the affected LEDs between their colour and off on its own clock (see
+    :mod:`freemicro.renderers.micro_leds`). Its *on-phase* firmware effect is
+    ``solid``, which is what the second element being ``True`` tells the caller
+    to drive between and dark. Every other effect passes straight through
+    :func:`parse_effect` with ``False``.
+    """
+    if isinstance(value, str):
+        key = value.strip().lower().replace(" ", "-").replace("_", "-")
+        if key in SOFTWARE_EFFECTS:
+            return EFFECTS["solid"], True
+    return parse_effect(value), False
+
+
 def effect_name(value: int) -> str:
     """Inverse of :func:`parse_effect`, for human-readable output."""
     for name, number in EFFECTS.items():
         if number == value:
             return name
     return str(value)
+
+
+def effect_label(effect: int, blink: bool = False) -> str:
+    """Human-readable effect name, honouring the software ``blink`` layer.
+
+    A blinking light is stored as ``solid`` plus a flag, so its firmware id
+    reads ``solid``; this is what turns it back into ``blink`` for display and
+    round-tripping.
+    """
+    return SOFT_BLINK if blink else effect_name(effect)
 
 
 def parse_color(value: ColorLike) -> int:
@@ -327,15 +362,19 @@ __all__ = [
     "METHOD_PREVIEW",
     "METHOD_RGBCFG",
     "METHOD_THREAD_STATUS",
+    "SOFTWARE_EFFECTS",
+    "SOFT_BLINK",
     "ZONES",
     "ZONE_AGENT_KEYS",
     "ZONE_BACKLIGHT",
     "ZONE_UNDERGLOW",
     "all_agent_keys",
     "color_to_hex",
+    "effect_label",
     "effect_name",
     "parse_color",
     "parse_effect",
+    "parse_effect_spec",
     "parse_zone",
     "preview_message",
     "preview_zone",

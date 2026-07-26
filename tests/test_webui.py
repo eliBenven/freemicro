@@ -320,12 +320,15 @@ def test_api_save_then_config_reads_back_what_was_written(keymap):
 
 
 def test_schema_lists_every_registered_action_and_effect(keymap):
-    from freemicro.device.lighting import EFFECTS
+    from freemicro.device.lighting import EFFECTS, SOFTWARE_EFFECTS
     from freemicro.input.actions import REGISTRY
 
     _, schema = Api(keymap).schema()
     assert {a["kind"] for a in schema["actions"]} == set(REGISTRY)
-    assert {e["name"] for e in schema["effects"]} == set(EFFECTS)
+    # The firmware effects, plus FreeMicro's own software effects (blink).
+    assert {e["name"] for e in schema["effects"]} == (
+        set(EFFECTS) | set(SOFTWARE_EFFECTS)
+    )
     assert "AG00" in schema["known_inputs"]
 
 

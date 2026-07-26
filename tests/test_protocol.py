@@ -159,6 +159,30 @@ def test_effect_names_round_trip():
         assert effect_name(number) == name
 
 
+def test_parse_effect_spec_splits_blink_from_solid():
+    from freemicro.device.lighting import parse_effect_spec
+
+    # A firmware effect passes straight through, never "blink".
+    assert parse_effect_spec("breath") == (EFFECTS["breath"], False)
+    assert parse_effect_spec(3) == (3, False)
+    # Blink is not a firmware id: it renders as solid on its on-phase, flagged.
+    assert parse_effect_spec("blink") == (EFFECTS["solid"], True)
+    assert parse_effect_spec("BLINK") == (EFFECTS["solid"], True)
+
+
+def test_parse_effect_still_rejects_blink_as_a_firmware_id():
+    # The wire layer must never see "blink" as an id; only the spec seam knows it.
+    with pytest.raises(LightingError):
+        parse_effect("blink")
+
+
+def test_effect_label_honours_the_software_blink():
+    from freemicro.device.lighting import effect_label
+
+    assert effect_label(EFFECTS["solid"], blink=False) == "solid"
+    assert effect_label(EFFECTS["solid"], blink=True) == "blink"
+
+
 def test_parse_zone_aliases():
     assert parse_zone("keys") == "backlight"
     assert parse_zone("ambient") == "underglow"

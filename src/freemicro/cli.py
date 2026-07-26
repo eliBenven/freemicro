@@ -1965,17 +1965,27 @@ def _set_lighting_zones(args: argparse.Namespace, zones: "list[str]") -> int:
 
 def _override_light(light, args: argparse.Namespace):
     """Apply any ``freemicro lights`` flags on top of the configured look."""
-    from freemicro.device.lighting import parse_color, parse_effect
+    from freemicro.device.lighting import parse_color, parse_effect_spec
     from freemicro.padconfig import StateLight
+
+    # `parse_effect_spec`, not `parse_effect`: `blink` is a FreeMicro-level
+    # software effect, not a firmware id, so it splits into a firmware id plus a
+    # flag. `parse_effect` rejects it outright, which is right for the wire but
+    # would make `--effect blink` an error here.
+    if args.effect:
+        effect_id, blink = parse_effect_spec(args.effect)
+    else:
+        effect_id, blink = light.effect, light.blink
 
     return StateLight(
         color=parse_color(args.color) if args.color else light.color,
-        effect=parse_effect(args.effect) if args.effect else light.effect,
+        effect=effect_id,
         brightness=(
             light.brightness if args.brightness is None else args.brightness
         ),
         speed=light.speed if args.speed is None else args.speed,
         magic=light.magic,
+        blink=blink,
     )
 
 
@@ -2542,8 +2552,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="walk every state in turn")
     lt.add_argument("--color", help="override the colour (#RRGGBB)")
     lt.add_argument("--effect",
-                    help="override the effect "
-                         "(off/solid/snake/rainbow/breath/gradient/shallow-breath)")
+                    help="override the effect (off/solid/snake/rainbow/breath/"
+                         "gradient/shallow-breath/blink)")
     lt.add_argument("--brightness", type=float, help="override brightness (0-1)")
     lt.add_argument("--speed", type=float, help="override speed (0-1)")
     lt.add_argument("--hold", type=float, default=1.5,

@@ -351,7 +351,7 @@ def validate(document: Mapping[str, Any]) -> PadConfig:
 
 def describe(pad: PadConfig) -> Dict[str, Any]:
     """A compact summary of a parsed config, for the browser to display."""
-    from freemicro.device.lighting import color_to_hex, effect_name
+    from freemicro.device.lighting import color_to_hex, effect_label
     from freemicro.state.engine import AgentState
 
     bindings: Dict[str, Any] = {}
@@ -367,7 +367,10 @@ def describe(pad: PadConfig) -> Dict[str, Any]:
             "light": None if action.light is None else {
                 "hex": color_to_hex(action.light.color),
                 "effect": action.light.effect,
-                "effect_name": effect_name(action.light.effect),
+                "effect_name": effect_label(
+                    action.light.effect, action.light.blink
+                ),
+                "blink": action.light.blink,
                 "brightness": action.light.brightness,
                 "speed": action.light.speed,
                 "zones": list(action.light.zones),
@@ -383,7 +386,8 @@ def describe(pad: PadConfig) -> Dict[str, Any]:
         states[state.value] = {
             "hex": color_to_hex(light.color),
             "effect": light.effect,
-            "effect_name": effect_name(light.effect),
+            "effect_name": effect_label(light.effect, light.blink),
+            "blink": light.blink,
             "brightness": light.brightness,
             "speed": light.speed,
         }

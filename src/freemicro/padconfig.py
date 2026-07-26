@@ -45,9 +45,10 @@ from freemicro.device.lighting import (
     ZONE_UNDERGLOW,
     LightingError,
     color_to_hex,
-    effect_name,
+    effect_label,
     parse_color,
     parse_effect,
+    parse_effect_spec,
     parse_zone,
     preview_zone,
 )
@@ -276,13 +277,23 @@ class PadConfigError(ValueError):
 
 @dataclass(frozen=True)
 class StateLight:
-    """How the pad should look in one agent state."""
+    """How the pad should look in one agent state.
+
+    ``blink`` is FreeMicro's own software effect: the firmware has no hard on/off
+    blink (only the smooth ``breath``), so when it is set the render loop toggles
+    this light between its colour and off on its own clock. It is stored
+    alongside a firmware ``effect`` of ``solid`` - the look shown on the *on*
+    phase - rather than as a firmware id, because there is no id to store. See
+    :func:`freemicro.device.lighting.parse_effect_spec` and
+    :mod:`freemicro.renderers.micro_leds`.
+    """
 
     color: int
     effect: int
     brightness: float
     speed: float
     magic: Optional[float] = None
+    blink: bool = False
 
     def to_zone(self) -> Dict[str, Any]:
         """The ``lights.preview`` zone object for this state."""
@@ -292,7 +303,7 @@ class StateLight:
 
     def describe(self) -> str:
         return (
-            f"{color_to_hex(self.color)} {effect_name(self.effect)} "
+            f"{color_to_hex(self.color)} {effect_label(self.effect, self.blink)} "
             f"b={self.brightness:g} s={self.speed:g}"
         )
 
@@ -329,6 +340,87 @@ def factory_light(state: AgentState) -> StateLight:
         brightness=1.0,
         speed=0.0,
     )
+
+
+def _solid(color: str) -> StateLight:
+    """A themed state colour, lit the factory way: solid, full, still."""
+    return StateLight(
+        color=parse_color(color), effect=parse_effect("solid"),
+        brightness=1.0, speed=0.0,
+    )
+
+
+def _themed(color: str, effect: str, speed: float = 0.0) -> StateLight:
+    """A themed state colour with a deliberate, non-solid effect.
+
+    Used by the high-contrast theme, where the effect is a *redundant* channel
+    for the state (see :data:`THEMES`): ``blink`` is a software effect, so it is
+    split into its firmware id plus the flag here exactly as the parser does.
+    """
+    effect_id, blink = parse_effect_spec(effect)
+    return StateLight(
+        color=parse_color(color), effect=effect_id, brightness=1.0,
+        speed=speed, blink=blink,
+    )
+
+
+#: Named colour palettes, so a user sets all five state colours at once instead
+#: of hand-picking each. ``lighting.theme`` names one of these; an explicit
+#: ``lighting.states`` entry still wins per state (see
+#: :meth:`LightingConfig.light_for`), so a theme is a starting point, never a
+#: cage.
+#:
+#: ``factory`` is the palette the pad ships with, spelled here so "reset to
+#: factory" is one word. ``nord`` and ``solarized`` are the two most-asked-for
+#: editor palettes. ``high-contrast`` is the accessibility answer: it leans on a
+#: **distinct effect per state**, not hue alone, because state conveyed by
+#: colour alone is the classic colourblind trap (error red vs done green). Its
+#: ``waiting`` breathes and its ``error`` blinks, so the two states you least
+#: want to miss are told apart without seeing their colour at all. Its hues are
+#: drawn from the Okabe-Ito colourblind-safe set.
+THEMES: Mapping[str, Mapping[AgentState, StateLight]] = {
+    "factory": {
+        AgentState.IDLE: _solid("#FFFFFF"),
+        AgentState.WORKING: _solid("#304FFE"),
+        AgentState.WAITING: _solid("#FF6D00"),
+        AgentState.DONE: _solid("#00FF4C"),
+        AgentState.ERROR: _solid("#FF0033"),
+    },
+    "nord": {
+        AgentState.IDLE: _solid("#D8DEE9"),
+        AgentState.WORKING: _solid("#5E81AC"),
+        AgentState.WAITING: _solid("#EBCB8B"),
+        AgentState.DONE: _solid("#A3BE8C"),
+        AgentState.ERROR: _solid("#BF616A"),
+    },
+    "solarized": {
+        AgentState.IDLE: _solid("#839496"),
+        AgentState.WORKING: _solid("#268BD2"),
+        AgentState.WAITING: _solid("#B58900"),
+        AgentState.DONE: _solid("#859900"),
+        AgentState.ERROR: _solid("#DC322F"),
+    },
+    "high-contrast": {
+        AgentState.IDLE: _solid("#FFFFFF"),
+        AgentState.WORKING: _solid("#0072B2"),
+        AgentState.WAITING: _themed("#E69F00", "breath", speed=0.3),
+        AgentState.DONE: _solid("#009E73"),
+        AgentState.ERROR: _themed("#D55E00", "blink", speed=0.5),
+    },
+}
+
+#: The theme names, in the order a picker should offer them.
+THEME_NAMES: Tuple[str, ...] = ("factory", "nord", "solarized", "high-contrast")
+
+
+def theme_light(theme: str, state: AgentState) -> Optional[StateLight]:
+    """The look a named theme gives one state, or ``None`` if it does not.
+
+    ``""`` (no theme) and an unknown name both return ``None``, which is what
+    lets :meth:`LightingConfig.light_for` fall through to the factory palette.
+    """
+    palette = THEMES.get(theme)
+    return None if palette is None else palette.get(state)
 
 
 #: The colour the pad you bought already uses while it is listening to you.
@@ -417,7 +509,7 @@ class ActivityLight(StateLight):
 
     def describe(self) -> str:
         return (
-            f"{color_to_hex(self.color)} {effect_name(self.effect)} "
+            f"{color_to_hex(self.color)} {effect_label(self.effect, self.blink)} "
             f"b={self.brightness:g} s={self.speed:g} on "
             f"{', '.join(self.zones)}"
         )
@@ -462,6 +554,74 @@ class ReassertConfig:
         return self.enabled and self.heartbeat_seconds > 0.0
 
 
+#: The states whose *entry* flashes the pad by default. These are the two that
+#: exist to fetch you, so they are the two worth a one-time cue to catch
+#: peripheral vision the moment a key crosses into them. An empty ``flash_on``
+#: turns the whole feature off.
+DEFAULT_FLASH_STATES: Tuple[AgentState, ...] = (
+    AgentState.WAITING, AgentState.ERROR,
+)
+
+#: Battery cue defaults. The threshold matches the vendor's own on-screen
+#: low-battery styling (``docs/FACTORY-DEFAULTS.md`` §10a: red text at ``<= 20%``
+#: and not charging); 15 is a touch tighter so the pad only speaks up when it is
+#: genuinely worth acting on. The look is deliberately *not* one of the five
+#: state colours: it lands on the underglow and pulses, so it reads as a
+#: property of the pad rather than of any one project.
+DEFAULT_BATTERY_THRESHOLD = 15
+DEFAULT_BATTERY_COLOR = "#FF6D00"
+#: How often the render loop re-reads the cached battery reading. This is a file
+#: read, not a device round trip - see :class:`BatteryConfig` - so it is cheap,
+#: but there is no reason to do it every quarter second either.
+DEFAULT_BATTERY_POLL_SECONDS = 60.0
+
+_BATTERY_FIELDS = (
+    "enabled", "threshold", "zone", "color", "effect", "brightness", "speed",
+    "poll_seconds", "comment",
+)
+
+
+@dataclass(frozen=True)
+class BatteryConfig:
+    """Surface a low battery through the lighting, off by default.
+
+    The pad reports battery over a ``device.status`` round trip on the same
+    vendor channel that carries lighting writes and key events. FreeMicro
+    therefore **never issues that round trip from the render path** - the render
+    loop already runs inside one long ``device.stream`` pump, and nesting a
+    second one to ask for battery would fight the very writes it is trying to
+    decorate. Instead this reads the *cached* reading that the menu bar poller
+    (and, when it owns the pad, the daemon) writes to ``~/.freemicro/status.json``
+    on its own slow clock, at most once every :attr:`poll_seconds`. A cache read
+    is a file ``stat``; it puts nothing on the channel.
+
+    Off by default on purpose: a low-battery cue on the pad is a FreeMicro
+    feature, not factory parity (``docs/FACTORY-DEFAULTS.md`` §10a says the
+    vendor app has none and that ours should ship off).
+    """
+
+    enabled: bool = False
+    #: Percent at or below which - and only when *not* charging - the cue shows.
+    threshold: int = DEFAULT_BATTERY_THRESHOLD
+    #: Where the cue lands. The underglow by default, so it never steals an
+    #: Agent Key that is carrying a project's state.
+    zone: str = ZONE_UNDERGLOW
+    color: int = field(default=parse_color(DEFAULT_BATTERY_COLOR))
+    effect: int = field(default=parse_effect("breath"))
+    brightness: float = 1.0
+    speed: float = 0.3
+    blink: bool = False
+    #: How often the cached reading is re-read. See the class docstring.
+    poll_seconds: float = DEFAULT_BATTERY_POLL_SECONDS
+
+    def light(self) -> StateLight:
+        """The look the cue paints while the battery is low."""
+        return StateLight(
+            color=self.color, effect=self.effect, brightness=self.brightness,
+            speed=self.speed, blink=self.blink,
+        )
+
+
 @dataclass(frozen=True)
 class LightingConfig:
     """The whole ``lighting`` section."""
@@ -477,6 +637,15 @@ class LightingConfig:
     #: :data:`LIGHTING_METHODS`.
     method: str = "rgbcfg"
     states: Mapping[AgentState, StateLight] = field(default_factory=dict)
+    #: A named palette (see :data:`THEMES`) to draw state colours from before
+    #: falling back to the factory. ``""`` means no theme. Explicit ``states``
+    #: entries always win, so a theme is a starting point, never a cage.
+    theme: str = ""
+    #: States whose *entry* plays a brief one-time attention flash. See
+    #: :data:`DEFAULT_FLASH_STATES`. Empty disables it.
+    flash_on: Tuple[AgentState, ...] = DEFAULT_FLASH_STATES
+    #: Reflect a low battery through the lighting. Off by default.
+    battery: BatteryConfig = field(default_factory=BatteryConfig)
     #: How we defend the colours we set against the other app writing them.
     reassert: ReassertConfig = field(default_factory=ReassertConfig)
     #: Blank the pad after this long with nothing happening; 0 never dims.
@@ -501,13 +670,24 @@ class LightingConfig:
         return self.states.get(state)
 
     def light_for(self, state: AgentState) -> StateLight:
-        """The look to actually show: the configured one, or the factory's.
+        """The look to actually show, in strict precedence.
 
-        Every state always has an answer here. ``docs/CUSTOMIZING.md`` tells
-        people they can delete a state they are happy with and get the factory
-        colour back, so the fallback has to *be* the factory colour.
+        An explicit ``lighting.states`` entry wins; then the named ``theme``, if
+        it sets this state; then the factory palette. Every state always has an
+        answer: ``docs/CUSTOMIZING.md`` tells people they can delete a state they
+        are happy with and get the factory colour back, so the final fallback
+        has to *be* the factory colour.
         """
-        return self.states.get(state) or factory_light(state)
+        explicit = self.states.get(state)
+        if explicit is not None:
+            return explicit
+        themed = theme_light(self.theme, state) if self.theme else None
+        return themed or factory_light(state)
+
+    @property
+    def flashes(self) -> bool:
+        """Whether any state is configured to flash on entry."""
+        return bool(self.flash_on)
 
     @property
     def auto_dim_enabled(self) -> bool:
@@ -720,7 +900,7 @@ def _parse_activity_light(input_id: str, raw: Any) -> ActivityLight:
     try:
         zones = tuple(dict.fromkeys(parse_zone(z) for z in zones_raw))
         color = parse_color(raw["color"])
-        effect = parse_effect(raw.get("effect", "solid"))
+        effect, blink = parse_effect_spec(raw.get("effect", "solid"))
         brightness = float(raw.get("brightness", 1.0))
         speed = float(raw.get("speed", 0.0))
         magic = None if raw.get("magic") is None else float(raw["magic"])
@@ -749,6 +929,7 @@ def _parse_activity_light(input_id: str, raw: Any) -> ActivityLight:
         brightness=brightness,
         speed=speed,
         magic=magic,
+        blink=blink,
         zones=zones,
         timeout_seconds=timeout,
     )
@@ -946,7 +1127,7 @@ def _parse_state_light(state: str, raw: Any) -> StateLight:
         )
     try:
         color = parse_color(raw["color"])
-        effect = parse_effect(raw.get("effect", "solid"))
+        effect, blink = parse_effect_spec(raw.get("effect", "solid"))
         brightness = float(raw.get("brightness", 1.0))
         speed = float(raw.get("speed", 0.0))
         magic = None if raw.get("magic") is None else float(raw["magic"])
@@ -960,7 +1141,8 @@ def _parse_state_light(state: str, raw: Any) -> StateLight:
                 f"lighting.states.{state}.{name} must be between 0 and 1"
             )
     return StateLight(
-        color=color, effect=effect, brightness=brightness, speed=speed, magic=magic
+        color=color, effect=effect, brightness=brightness, speed=speed,
+        magic=magic, blink=blink,
     )
 
 
@@ -1023,6 +1205,89 @@ def _parse_auto_dim(raw: Any) -> float:
     return seconds
 
 
+def _parse_flash_on(raw: Any) -> Tuple[AgentState, ...]:
+    """Parse ``lighting.flash_on``. Absent means the two alert states; ``[]``/off.
+
+    Forgiving about how "off" is spelled, for the same reason auto-dim is: a
+    setting whose interesting values are "the default" and "nothing" is one
+    people reach to disable in a hurry from three different surfaces.
+    """
+    if raw is None:
+        return DEFAULT_FLASH_STATES
+    if raw is False or (isinstance(raw, str) and raw.strip().lower() in (
+        "off", "none", "never", ""
+    )):
+        return ()
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        raise PadConfigError(
+            "\"lighting.flash_on\" must be a list of state names, or false to "
+            "turn the entry flash off"
+        )
+    valid = {s.value for s in AgentState}
+    states: List[AgentState] = []
+    for name in raw:
+        if name not in valid:
+            raise PadConfigError(
+                f"lighting.flash_on has unknown state {name!r}; expected "
+                f"{', '.join(sorted(valid))}"
+            )
+        state = AgentState(name)
+        if state not in states:
+            states.append(state)
+    return tuple(states)
+
+
+def _parse_battery(raw: Any) -> BatteryConfig:
+    """Parse ``lighting.battery``. Absent means the defaults, which are off."""
+    defaults = BatteryConfig()
+    if raw is None:
+        return defaults
+    if not isinstance(raw, dict):
+        raise PadConfigError("\"lighting.battery\" must be an object")
+    unknown = {k for k in raw if not k.startswith("_")} - set(_BATTERY_FIELDS)
+    if unknown:
+        raise PadConfigError(
+            "lighting.battery has unknown field(s): "
+            f"{', '.join(sorted(unknown))}; it takes: {', '.join(_BATTERY_FIELDS)}"
+        )
+    try:
+        threshold = int(raw.get("threshold", defaults.threshold))
+        zone = parse_zone(raw.get("zone", ZONE_UNDERGLOW))
+        color = parse_color(raw.get("color", DEFAULT_BATTERY_COLOR))
+        effect, blink = parse_effect_spec(raw.get("effect", "breath"))
+        brightness = float(raw.get("brightness", defaults.brightness))
+        speed = float(raw.get("speed", defaults.speed))
+        poll_seconds = float(raw.get("poll_seconds", defaults.poll_seconds))
+    except (LightingError, TypeError, ValueError) as exc:
+        raise PadConfigError(f"lighting.battery: {exc}") from exc
+    if not 0 <= threshold <= 100:
+        raise PadConfigError(
+            "\"lighting.battery.threshold\" is a percent, so it must be 0-100"
+        )
+    for name, value in (("brightness", brightness), ("speed", speed)):
+        if not 0.0 <= value <= 1.0:
+            raise PadConfigError(
+                f"\"lighting.battery.{name}\" must be between 0 and 1"
+            )
+    if poll_seconds <= 0.0:
+        raise PadConfigError(
+            "\"lighting.battery.poll_seconds\" must be more than 0"
+        )
+    return BatteryConfig(
+        enabled=bool(raw.get("enabled", defaults.enabled)),
+        threshold=threshold,
+        zone=zone,
+        color=color,
+        effect=effect,
+        brightness=brightness,
+        speed=speed,
+        blink=blink,
+        poll_seconds=poll_seconds,
+    )
+
+
 def _parse_lighting(raw: Any) -> LightingConfig:
     if raw is None:
         return LightingConfig()
@@ -1049,6 +1314,13 @@ def _parse_lighting(raw: Any) -> LightingConfig:
             f"lighting.method must be one of {', '.join(LIGHTING_METHODS)}"
         )
     auto_dim = _parse_auto_dim(raw.get("auto_dim_seconds", defaults.auto_dim_seconds))
+    theme = str(raw.get("theme", defaults.theme) or "").strip().lower()
+    if theme and theme not in THEMES:
+        raise PadConfigError(
+            f"lighting.theme must be one of {', '.join(THEME_NAMES)}, or omitted"
+        )
+    flash_on = _parse_flash_on(raw.get("flash_on"))
+    battery = _parse_battery(raw.get("battery"))
     states_raw = raw.get("states") or {}
     if not isinstance(states_raw, dict):
         raise PadConfigError("\"lighting.states\" must be an object")
@@ -1067,6 +1339,9 @@ def _parse_lighting(raw: Any) -> LightingConfig:
         on_exit=on_exit,
         method=method,
         states=states,
+        theme=theme,
+        flash_on=flash_on,
+        battery=battery,
         reassert=_parse_reassert(raw.get("reassert")),
         auto_dim_seconds=auto_dim,
         auto_dim_alerts=bool(raw.get("auto_dim_alerts", defaults.auto_dim_alerts)),
@@ -1342,9 +1617,15 @@ __all__ = [
     "AGENT_KEYS",
     "ActivityLight",
     "AgentKeysConfig",
+    "BatteryConfig",
     "DEFAULT_ACTIVITY_TIMEOUT",
+    "DEFAULT_BATTERY_THRESHOLD",
+    "DEFAULT_FLASH_STATES",
     "FACTORY_RECORDING",
+    "THEMES",
+    "THEME_NAMES",
     "factory_recording_light",
+    "theme_light",
     "CHORD_MAX_KEYS",
     "CHORD_SEPARATOR",
     "CHORD_SETTLE_MS_MAX",
