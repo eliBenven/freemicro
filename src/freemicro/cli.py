@@ -683,11 +683,13 @@ def cmd_daemon(args: argparse.Namespace) -> int:
         return _daemon_run(args)
 
     if action == "install":
+        if getattr(args, "on_connect", False):
+            return _daemon_install_on_connect(args)
         reinstall = daemon.is_installed()
         result = daemon.install(force=args.force)
         if not result["ok"]:
             print(f"Not installing: {result['error']}", file=sys.stderr)
-            if result.get("warning"):
+            if result.get("warning") or result.get("conflict"):
                 print("  (--force installs it anyway.)", file=sys.stderr)
             return 1
         print(
@@ -720,16 +722,32 @@ def cmd_daemon(args: argparse.Namespace) -> int:
         return 1
 
     if action == "uninstall":
-        result = daemon.uninstall()
-        if not result["ok"]:
-            print(f"Uninstall failed: {result['error']}", file=sys.stderr)
-            print("Try:  launchctl bootout " + daemon.service_target(),
-                  file=sys.stderr)
+        # Remove *both* launchers, whichever is installed: they are mutually
+        # exclusive, but uninstall must never leave an orphan LaunchAgent behind,
+        # so it sweeps the login daemon and the on-connect agent in one go.
+        jobs = (
+            ("login daemon", daemon.LABEL),
+            ("on-connect agent", daemon.ONCONNECT_LABEL),
+        )
+        any_existed = False
+        failed = False
+        for name, label in jobs:
+            result = daemon.uninstall(label)
+            if not result["ok"]:
+                failed = True
+                print(f"Uninstall of the {name} failed: {result['error']}",
+                      file=sys.stderr)
+                print("Try:  launchctl bootout " + daemon.service_target(label),
+                      file=sys.stderr)
+                continue
+            if result["existed"]:
+                any_existed = True
+                print(f"Stopped and removed {daemon.plist_path(label)}")
+        if failed:
             return 1
-        if not result["existed"]:
-            print("The daemon was not installed. Nothing to do.")
+        if not any_existed:
+            print("Neither launcher was installed. Nothing to do.")
             return 0
-        print(f"Stopped and removed {daemon.plist_path()}")
         print("The pad is free for `freemicro run` again.")
         return 0
 
@@ -742,10 +760,15 @@ def cmd_daemon(args: argparse.Namespace) -> int:
         return 0
 
     # status
+    if getattr(args, "on_connect", False):
+        return _daemon_onconnect_status(args)
     state = daemon.status()
     if args.json:
         print(json.dumps(state, indent=2))
         return 0 if state["loaded"] else 1
+    if state.get("onconnect_installed"):
+        print("Note: the on-connect agent is installed - this login daemon is "
+              "not.\n  See:  freemicro daemon status --on-connect\n")
     print(f"Label:     {state['label']}")
     print(f"Plist:     {state['plist']}"
           f"{'' if state['installed'] else '   (not installed)'}")
@@ -778,6 +801,100 @@ def cmd_daemon(args: argparse.Namespace) -> int:
                 print(f"  {line}")
         print("\n  freemicro daemon logs       the last thing it printed")
         return 1
+    return 0
+
+
+def _daemon_install_on_connect(args: argparse.Namespace) -> int:
+    """Install the launch-on-connect agent and print how to verify it on BLE.
+
+    Deliberately does not wait for a pid: there is nothing to wait for. The whole
+    point of this mode is that launchd starts the job only when the pad's HID
+    device appears, so at install time - pad asleep - the correct, healthy state
+    is loaded-but-not-running. So instead of declaring victory on a process that
+    should not exist yet, it prints the exact steps to prove it on real hardware.
+    """
+    from freemicro import daemon
+
+    reinstall = daemon.is_installed(daemon.ONCONNECT_LABEL)
+    result = daemon.install_on_connect(force=args.force)
+    if not result["ok"]:
+        print(f"Not installing: {result['error']}", file=sys.stderr)
+        if result.get("warning") or result.get("conflict"):
+            print("  (--force installs it anyway.)", file=sys.stderr)
+        return 1
+
+    print(
+        "Reinstalling the FreeMicro launch-on-connect agent."
+        if reinstall else
+        "Installing the FreeMicro launch-on-connect agent."
+    )
+    print(f"  plist:   {result['path']}")
+    print(f"  command: {daemon.status()['command']}")
+    print(f"  matches: Codex Micro  VID 0x{daemon.CODEX_MICRO_VID:04X} / "
+          f"PID 0x{daemon.CODEX_MICRO_PID:04X}  (IOHIDDevice over BLE, "
+          "IOUSBHostDevice over USB)")
+    print(f"  log:     {daemon.log_path()}")
+    print(
+        "\nHow this works: launchd starts `freemicro daemon run` when the pad's\n"
+        "HID device appears - a button press wakes the Bluetooth link and the\n"
+        "device enumerates - and nothing runs while the pad is asleep. It does\n"
+        "not start at login."
+    )
+    print(
+        "\nVerify launchd picked up the device match:\n"
+        f"  launchctl print {daemon.service_target(daemon.ONCONNECT_LABEL)}\n"
+        "  Look for a 'com.apple.iokit.matching' event entry naming the pad's\n"
+        "  VendorID/ProductID. If it is there, launchd is watching for the pad."
+    )
+    print(
+        "\nVerify it actually fires on your hardware (this is the part only your\n"
+        "real pad can confirm - IOKit matching is well documented for USB and\n"
+        "less so for Bluetooth LE HID):\n"
+        "  1. Disconnect the pad: turn it off, or move out of Bluetooth range.\n"
+        "  2. Press any button to wake it and re-establish the connection.\n"
+        "  3. Within a second or two:\n"
+        "       freemicro daemon status --on-connect   # should show a pid\n"
+        "       freemicro daemon logs                   # a fresh 'daemon up' line\n"
+        "  If nothing starts, the BLE-match path did not fire on your macOS; fall\n"
+        "  back to the login daemon:  freemicro daemon uninstall && freemicro "
+        "daemon install"
+    )
+    return 0
+
+
+def _daemon_onconnect_status(args: argparse.Namespace) -> int:
+    """Report the launch-on-connect agent. 'Not running' is its resting state."""
+    from freemicro import daemon
+
+    state = daemon.onconnect_status()
+    if args.json:
+        print(json.dumps(state, indent=2))
+        return 0 if state["installed"] else 1
+    if state.get("daemon_installed"):
+        print("Note: the login daemon is installed - the on-connect agent is "
+              "not.\n  See:  freemicro daemon status\n")
+    print(f"Label:     {state['label']}")
+    print(f"Plist:     {state['plist']}"
+          f"{'' if state['installed'] else '   (not installed)'}")
+    print(f"Command:   {state['command']}")
+    print(f"Matches:   Codex Micro  VID 0x{state['vendor_id']:04X} / "
+          f"PID 0x{state['product_id']:04X}")
+    if not state["installed"]:
+        print("\n  freemicro daemon install --on-connect   start it when the pad "
+              "connects")
+        return 1
+    if state["pid"]:
+        print(f"Running:   yes, pid {state['pid']} - the pad is connected and "
+              "driving FreeMicro")
+    elif state["loaded"]:
+        print("Running:   no - launchd is watching for the pad (this is the "
+              "normal\n           resting state while the pad is asleep)")
+    else:
+        print("Running:   no - the plist exists but launchd has not loaded it")
+        print("           → freemicro daemon install --on-connect")
+        return 1
+    if state["lock_role"]:
+        print(f"Pad held by: {state['lock_role']} (pid {state['lock_pid']})")
     return 0
 
 
@@ -2207,6 +2324,9 @@ def build_parser() -> argparse.ArgumentParser:
     dn.add_argument("--force", action="store_true",
                     help="with install: install even from a folder macOS blocks "
                          "background agents from reading")
+    dn.add_argument("--on-connect", dest="on_connect", action="store_true",
+                    help="with install/status: the agent launchd starts when the "
+                         "Codex Micro connects, instead of the login daemon")
     dn.add_argument("--no-restart", action="store_true",
                     help="with run: don't re-exec when FreeMicro is updated")
     dn.add_argument("-v", "--verbose", action="store_true",

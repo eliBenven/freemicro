@@ -187,5 +187,169 @@ def test_a_stale_lock_file_does_not_wedge_the_pad(monkeypatch, tmp_path):
 
 def test_is_running_is_false_without_an_installed_agent(monkeypatch, tmp_path):
     monkeypatch.setenv("FREEMICRO_HOME", str(tmp_path))
-    monkeypatch.setattr(daemon, "is_installed", lambda: False)
+    monkeypatch.setattr(daemon, "is_installed", lambda label=daemon.LABEL: False)
     assert daemon.is_running() is False
+
+
+# -- the launch-on-connect agent --------------------------------------------
+
+def test_onconnect_plist_matches_the_codex_micro_over_hid_and_usb():
+    """The whole feature: launchd starts us when THIS device appears.
+
+    Two matchers under one ``com.apple.iokit.matching`` dict so a single plist
+    covers Bluetooth LE (the owner's transport, an ``IOHIDDevice``) and USB (the
+    same pad as an ``IOUSBHostDevice``). The identifiers are integers because
+    that is what IOKit matches on - a ``"0x303A"`` string would silently match
+    nothing.
+    """
+    events = daemon.build_onconnect_plist()["LaunchEvents"]
+    match = events["com.apple.iokit.matching"]
+    matchers = list(match.values())
+
+    hid = next(m for m in matchers if m["IOProviderClass"] == "IOHIDDevice")
+    assert hid["VendorID"] == 0x303A == 12346
+    assert hid["ProductID"] == 0x8360 == 33632
+
+    usb = next(m for m in matchers if m["IOProviderClass"] == "IOUSBHostDevice")
+    assert usb["idVendor"] == 12346
+    assert usb["idProduct"] == 33632
+
+
+def test_onconnect_plist_does_not_run_at_login_and_does_not_keepalive():
+    """The two flags that make it on-connect and not always-on.
+
+    RunAtLoad True would start it every login regardless of the pad - the exact
+    always-on behaviour this mode replaces. KeepAlive True would respawn it in a
+    tight loop whenever the pad was momentarily unavailable. Both must be False.
+    """
+    plist = daemon.build_onconnect_plist()
+    assert plist["RunAtLoad"] is False
+    assert plist["KeepAlive"] is False
+
+
+def test_onconnect_plist_uses_the_same_absolute_command_as_the_daemon():
+    argv = daemon.build_onconnect_plist()["ProgramArguments"]
+    assert os.path.isabs(argv[0])
+    assert argv[-2:] == ["daemon", "run"]
+    assert argv == daemon.build_plist()["ProgramArguments"]
+
+
+def test_onconnect_plist_round_trips_and_keeps_integer_ids():
+    loaded = plistlib.loads(daemon.render_onconnect_plist())
+    assert loaded["Label"] == daemon.ONCONNECT_LABEL
+    hid = loaded["LaunchEvents"]["com.apple.iokit.matching"][
+        "com.freemicro.codexmicro-hid"
+    ]
+    assert isinstance(hid["VendorID"], int)
+    assert hid["VendorID"] == 12346
+
+
+def test_onconnect_plist_carries_a_relocated_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("FREEMICRO_HOME", str(tmp_path))
+    plist = daemon.build_onconnect_plist()
+    assert plist["EnvironmentVariables"]["FREEMICRO_HOME"] == str(tmp_path)
+
+
+def test_onconnect_install_refuses_a_binary_launchd_cannot_read():
+    """Same TCC trap as the login daemon: a Desktop binary can never launch."""
+    doomed = [os.path.expanduser("~/Desktop/fm/.venv/bin/freemicro"),
+              "daemon", "run"]
+    result = daemon.install_on_connect(argv=doomed)
+    assert result["ok"] is False
+    assert result["warning"] == "Desktop"
+    assert "pipx" in result["error"]
+
+
+def test_conflicting_label_names_the_other_launcher(monkeypatch):
+    monkeypatch.setattr(
+        daemon, "is_installed", lambda label=daemon.LABEL: label == daemon.LABEL
+    )
+    # Installing on-connect while the login daemon is present is a conflict.
+    assert daemon.conflicting_label(on_connect=True) == daemon.LABEL
+    # Installing the login daemon while nothing else is present is not.
+    assert daemon.conflicting_label(on_connect=False) is None
+
+
+def test_onconnect_install_refuses_when_the_login_daemon_is_installed(monkeypatch):
+    monkeypatch.setattr(
+        daemon, "is_installed", lambda label=daemon.LABEL: label == daemon.LABEL
+    )
+    result = daemon.install_on_connect(
+        argv=["/usr/local/bin/freemicro", "daemon", "run"]
+    )
+    assert result["ok"] is False
+    assert result["conflict"] == daemon.LABEL
+    assert "freemicro daemon uninstall" in result["error"]
+
+
+def test_login_install_refuses_when_the_onconnect_agent_is_installed(monkeypatch):
+    monkeypatch.setattr(
+        daemon, "is_installed",
+        lambda label=daemon.LABEL: label == daemon.ONCONNECT_LABEL,
+    )
+    result = daemon.install(argv=["/usr/local/bin/freemicro", "daemon", "run"])
+    assert result["ok"] is False
+    assert result["conflict"] == daemon.ONCONNECT_LABEL
+
+
+def test_onconnect_install_writes_the_plist_and_uninstall_removes_it(
+    monkeypatch, tmp_path
+):
+    """End to end at the data layer: no launchctl, no real LaunchAgents folder.
+
+    Also proves the on-connect install does NOT create the login daemon's plist,
+    and does not kickstart (which would force a run with no pad attached).
+    """
+    monkeypatch.setenv("FREEMICRO_HOME", str(tmp_path))
+    monkeypatch.setattr(daemon, "agents_dir", lambda: tmp_path / "LaunchAgents")
+    calls = []
+    monkeypatch.setattr(
+        daemon, "_launchctl",
+        lambda *a, **k: (calls.append(a), (0, ""))[1],
+    )
+    monkeypatch.setattr(
+        daemon, "launchctl_state",
+        lambda label=daemon.LABEL: {
+            "loaded": False, "pid": None, "last_exit": None, "raw": ""
+        },
+    )
+    argv = ["/usr/local/bin/freemicro", "daemon", "run"]
+
+    result = daemon.install_on_connect(argv=argv)
+    assert result["ok"] is True
+
+    path = daemon.plist_path(daemon.ONCONNECT_LABEL)
+    assert path.exists()
+    loaded = plistlib.loads(path.read_bytes())
+    assert loaded["RunAtLoad"] is False
+    assert "com.apple.iokit.matching" in loaded["LaunchEvents"]
+    # The on-connect agent must not be kickstarted - nothing forces it to run.
+    assert not any("kickstart" in a for a in calls)
+    # And the login daemon's plist was never written.
+    assert not daemon.plist_path(daemon.LABEL).exists()
+
+    out = daemon.uninstall(daemon.ONCONNECT_LABEL)
+    assert out["ok"] is True
+    assert out["existed"] is True
+    assert not path.exists()
+
+
+def test_onconnect_status_treats_loaded_but_idle_as_healthy(monkeypatch, tmp_path):
+    monkeypatch.setenv("FREEMICRO_HOME", str(tmp_path))
+    monkeypatch.setattr(daemon, "agents_dir", lambda: tmp_path / "LaunchAgents")
+    monkeypatch.setattr(
+        daemon, "launchctl_state",
+        lambda label=daemon.LABEL: {
+            "loaded": True, "pid": None, "last_exit": None, "raw": ""
+        },
+    )
+    (tmp_path / "LaunchAgents").mkdir()
+    daemon.plist_path(daemon.ONCONNECT_LABEL).write_bytes(
+        daemon.render_onconnect_plist()
+    )
+    state = daemon.onconnect_status()
+    assert state["installed"] is True
+    assert state["loaded"] is True
+    assert state["pid"] is None
+    assert state["vendor_id"] == 0x303A
+    assert state["product_id"] == 0x8360

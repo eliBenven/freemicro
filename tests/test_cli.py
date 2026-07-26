@@ -475,3 +475,109 @@ class _StubDevice:
 
     def close(self):
         return None
+
+
+# ---------------------------------------------------------------------------
+# daemon: launch-on-connect
+# ---------------------------------------------------------------------------
+
+def _onconnect_result(ok=True, conflict=None, warning=None, error=""):
+    return {
+        "ok": ok, "path": "/x/com.freemicro.onconnect.plist", "replaced": False,
+        "warning": warning, "conflict": conflict, "error": error,
+    }
+
+
+def test_daemon_install_on_connect_prints_ble_verification(monkeypatch, capsys):
+    from freemicro import daemon
+
+    monkeypatch.setattr(daemon, "is_installed", lambda label=daemon.LABEL: False)
+    monkeypatch.setattr(daemon, "install_on_connect",
+                        lambda force=False: _onconnect_result())
+    monkeypatch.setattr(daemon, "status",
+                        lambda: {"command": "/usr/local/bin/freemicro daemon run"})
+
+    rc = cli.cmd_daemon(Namespace(action="install", on_connect=True, force=False))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "launch-on-connect agent" in out
+    # It tells the owner exactly how to prove it on real BLE hardware.
+    assert "launchctl print" in out
+    assert "Disconnect the pad" in out
+    assert "status --on-connect" in out
+    # And is honest that BLE matching is the unverified part.
+    assert "Bluetooth" in out
+
+
+def test_daemon_install_on_connect_refuses_when_login_daemon_present(
+    monkeypatch, capsys
+):
+    from freemicro import daemon
+
+    monkeypatch.setattr(daemon, "is_installed",
+                        lambda label=daemon.LABEL: label == daemon.LABEL)
+    monkeypatch.setattr(
+        daemon, "install_on_connect",
+        lambda force=False: _onconnect_result(
+            ok=False, conflict=daemon.LABEL,
+            error="the login daemon is already installed",
+        ),
+    )
+    rc = cli.cmd_daemon(Namespace(action="install", on_connect=True, force=False))
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "already installed" in err
+    assert "--force" in err
+
+
+def test_daemon_uninstall_sweeps_both_launchers(monkeypatch, capsys):
+    from freemicro import daemon
+
+    seen = []
+
+    def _uninstall(label=daemon.LABEL):
+        seen.append(label)
+        return {"ok": True, "existed": label == daemon.ONCONNECT_LABEL,
+                "removed": True, "error": ""}
+
+    monkeypatch.setattr(daemon, "uninstall", _uninstall)
+    rc = cli.cmd_daemon(Namespace(action="uninstall", on_connect=False))
+    out = capsys.readouterr().out
+    assert rc == 0
+    # Both labels are removed, so no orphan LaunchAgent can survive.
+    assert daemon.LABEL in seen and daemon.ONCONNECT_LABEL in seen
+    assert "pad is free" in out
+
+
+def test_daemon_status_on_connect_calls_waiting_healthy(monkeypatch, capsys):
+    from freemicro import daemon
+
+    monkeypatch.setattr(daemon, "onconnect_status", lambda: {
+        "label": daemon.ONCONNECT_LABEL, "plist": "/x.plist", "installed": True,
+        "loaded": True, "pid": None, "vendor_id": 0x303A, "product_id": 0x8360,
+        "lock_role": None, "lock_pid": None, "command": "cmd",
+        "protected_location": None, "daemon_installed": False,
+    })
+    rc = cli.cmd_daemon(Namespace(action="status", on_connect=True, json=False))
+    out = capsys.readouterr().out
+    assert rc == 0
+    # Loaded-but-no-pid is the resting state, not a fault.
+    assert "watching for the pad" in out
+    assert "303A" in out.upper()
+
+
+def test_daemon_status_notes_the_onconnect_agent_when_it_is_installed(
+    monkeypatch, capsys
+):
+    from freemicro import daemon
+
+    monkeypatch.setattr(daemon, "status", lambda: {
+        "label": daemon.LABEL, "plist": "/x.plist", "installed": False,
+        "loaded": False, "pid": None, "last_exit": None, "command": "cmd",
+        "log": "/x.log", "log_size": 0, "lock_role": None, "lock_pid": None,
+        "protected_location": None, "onconnect_installed": True,
+    })
+    cli.cmd_daemon(Namespace(action="status", on_connect=False, json=False))
+    out = capsys.readouterr().out
+    assert "on-connect agent is installed" in out
+    assert "status --on-connect" in out

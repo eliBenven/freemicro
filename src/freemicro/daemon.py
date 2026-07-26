@@ -35,8 +35,22 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from freemicro.config import config_home
 
-#: launchd label and the plist that carries it.
+#: launchd label and the plist that carries it. This is the login-time agent:
+#: KeepAlive, RunAtLoad, one process that lives for the whole session.
 LABEL = "com.freemicro.daemon"
+
+#: The *other* launcher: an agent with no RunAtLoad that launchd starts only
+#: when the pad's HID device appears (see :func:`build_onconnect_plist`). A
+#: separate label so the two can be installed, seen and removed independently -
+#: though they are never installed at the same time (see :func:`conflicting_label`).
+ONCONNECT_LABEL = "com.freemicro.onconnect"
+
+#: The Codex Micro's USB-IF identifiers, as integers (plists carry integers, not
+#: ``0x`` strings). VID 0x303A is Espressif; PID 0x8360 is this pad. Over BLE the
+#: device enumerates as an ``IOHIDDevice`` exposing ``VendorID``/``ProductID``;
+#: over USB it also appears under ``IOUSBHostDevice`` as ``idVendor``/``idProduct``.
+CODEX_MICRO_VID = 0x303A  # 12346
+CODEX_MICRO_PID = 0x8360  # 33632
 
 #: Cap for the log file. launchd never rotates; we do it ourselves, keeping the
 #: newest half. A log that grows without bound on a laptop is a bug.
@@ -51,8 +65,8 @@ def agents_dir() -> Path:
     return Path.home() / "Library" / "LaunchAgents"
 
 
-def plist_path() -> Path:
-    return agents_dir() / f"{LABEL}.plist"
+def plist_path(label: str = LABEL) -> Path:
+    return agents_dir() / f"{label}.plist"
 
 
 def log_path() -> Path:
@@ -63,8 +77,8 @@ def lock_path() -> Path:
     return config_home() / "pad.lock"
 
 
-def service_target() -> str:
-    return f"gui/{os.getuid()}/{LABEL}"
+def service_target(label: str = LABEL) -> str:
+    return f"gui/{os.getuid()}/{label}"
 
 
 # ---------------------------------------------------------------------------
@@ -272,9 +286,8 @@ def protected_location(path: Optional[Path] = None) -> Optional[str]:
     return first if first in _PROTECTED_DIRS else None
 
 
-def build_plist(argv: Optional[List[str]] = None) -> Dict[str, Any]:
-    argv = argv or daemon_argv()
-    log = log_path()
+def _plist_env() -> Dict[str, str]:
+    """The environment both agents run under. launchd starts jobs near-empty."""
     env = {
         # Enough PATH for the shell-action bindings to find ordinary tools.
         "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -283,6 +296,12 @@ def build_plist(argv: Optional[List[str]] = None) -> Dict[str, Any]:
     # than the CLI reads.
     if os.environ.get("FREEMICRO_HOME"):
         env["FREEMICRO_HOME"] = os.environ["FREEMICRO_HOME"]
+    return env
+
+
+def build_plist(argv: Optional[List[str]] = None) -> Dict[str, Any]:
+    argv = argv or daemon_argv()
+    log = log_path()
     return {
         "Label": LABEL,
         "ProgramArguments": argv,
@@ -290,7 +309,72 @@ def build_plist(argv: Optional[List[str]] = None) -> Dict[str, Any]:
         "KeepAlive": True,
         "ThrottleInterval": THROTTLE_SECONDS,
         "ProcessType": "Interactive",
-        "EnvironmentVariables": env,
+        "EnvironmentVariables": _plist_env(),
+        "StandardOutPath": str(log),
+        "StandardErrorPath": str(log),
+        "WorkingDirectory": str(Path.home()),
+    }
+
+
+def build_onconnect_plist(argv: Optional[List[str]] = None) -> Dict[str, Any]:
+    """The launch-on-connect agent: start ``daemon run`` when the pad appears.
+
+    The heart of it is ``LaunchEvents -> com.apple.iokit.matching``: launchd
+    watches the IOKit registry and starts this job when a device matching one of
+    the dictionaries below shows up. That is the native, poll-free way to do
+    "launch when this device connects" - nothing runs while the pad is asleep,
+    and the moment a button press wakes the BLE link and the HID device
+    enumerates, launchd starts us.
+
+    Two matchers, so one plist covers both transports the owner might use:
+
+    * ``IOHIDDevice`` with ``VendorID``/``ProductID`` - the Bluetooth LE form the
+      owner is actually on. A BLE keypress establishes the link and the HID
+      device appears with these integer properties.
+    * ``IOUSBHostDevice`` with ``idVendor``/``idProduct`` - the same pad on a USB
+      cable, so plugging in also launches us.
+
+    ``RunAtLoad`` is deliberately **False**: an on-connect agent that also ran at
+    login would start every session whether or not the pad is anywhere near, which
+    is exactly the always-on process this mode exists to avoid. ``KeepAlive`` is
+    **False** too: the device-appeared event is the trigger, and ``daemon run``
+    already reconnects on its own for the life of the process and exits cleanly
+    (status 0) if another owner holds the pad - so there is nothing for launchd to
+    respawn, and a respawn loop is precisely the failure ``KeepAlive`` would create
+    if the pad were briefly unavailable. Start on the event, then get out of the
+    way.
+
+    Honest caveat, because it matters: ``com.apple.iokit.matching`` is well
+    trodden for USB and less so for BLE HID. The plist here is correct and fully
+    testable as data; whether launchd fires it on a *Bluetooth* connect is a
+    property of the owner's macOS and hardware, and the install command prints the
+    exact steps to confirm it on the real pad.
+    """
+    argv = argv or daemon_argv()
+    log = log_path()
+    return {
+        "Label": ONCONNECT_LABEL,
+        "ProgramArguments": argv,
+        "LaunchEvents": {
+            "com.apple.iokit.matching": {
+                # Bluetooth LE (and USB HID interface): the form the owner uses.
+                "com.freemicro.codexmicro-hid": {
+                    "IOProviderClass": "IOHIDDevice",
+                    "VendorID": CODEX_MICRO_VID,
+                    "ProductID": CODEX_MICRO_PID,
+                },
+                # The same pad over a USB cable, matched at the USB device layer.
+                "com.freemicro.codexmicro-usb": {
+                    "IOProviderClass": "IOUSBHostDevice",
+                    "idVendor": CODEX_MICRO_VID,
+                    "idProduct": CODEX_MICRO_PID,
+                },
+            }
+        },
+        "RunAtLoad": False,
+        "KeepAlive": False,
+        "ProcessType": "Interactive",
+        "EnvironmentVariables": _plist_env(),
         "StandardOutPath": str(log),
         "StandardErrorPath": str(log),
         "WorkingDirectory": str(Path.home()),
@@ -299,6 +383,10 @@ def build_plist(argv: Optional[List[str]] = None) -> Dict[str, Any]:
 
 def render_plist(argv: Optional[List[str]] = None) -> bytes:
     return plistlib.dumps(build_plist(argv))
+
+
+def render_onconnect_plist(argv: Optional[List[str]] = None) -> bytes:
+    return plistlib.dumps(build_onconnect_plist(argv))
 
 
 # ---------------------------------------------------------------------------
@@ -315,40 +403,62 @@ def _launchctl(*args: str, timeout: float = 20.0) -> Tuple[int, str]:
     return proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip()
 
 
-def is_installed() -> bool:
-    return plist_path().exists()
+def is_installed(label: str = LABEL) -> bool:
+    return plist_path(label).exists()
 
 
-def _bootout() -> Tuple[int, str]:
+def conflicting_label(on_connect: bool) -> Optional[str]:
+    """The label of the *other* launcher, if it is installed - else ``None``.
+
+    Only one thing may drive the pad, and two launchers is two things trying to.
+    They are lock-guarded so they cannot both actually hold the device at once,
+    but a machine with both installed is a machine where "why did my pad start
+    twice" has no clean answer. So installing either refuses while the other is
+    present, and this is the check that says which one is in the way.
+    """
+    other = LABEL if on_connect else ONCONNECT_LABEL
+    return other if is_installed(other) else None
+
+
+def _launcher_name(label: str) -> str:
+    return "on-connect agent" if label == ONCONNECT_LABEL else "login daemon"
+
+
+def _bootout(label: str = LABEL) -> Tuple[int, str]:
     """Stop and unregister the job, on new and old launchctl alike."""
-    code, out = _launchctl("bootout", service_target())
+    code, out = _launchctl("bootout", service_target(label))
     if code == 0 or "No such process" in out or "not find" in out.lower():
         return 0, out
     # Pre-Yosemite-style fallback; harmless if the modern call already worked.
-    legacy_code, legacy_out = _launchctl("unload", "-w", str(plist_path()))
+    legacy_code, legacy_out = _launchctl("unload", "-w", str(plist_path(label)))
     if legacy_code == 0:
         return 0, legacy_out
     return code, out
 
 
-def install(
-    argv: Optional[List[str]] = None, force: bool = False
+def _install(
+    label: str,
+    payload: bytes,
+    argv: Optional[List[str]],
+    force: bool,
+    kickstart: bool,
+    on_connect: bool,
 ) -> Dict[str, Any]:
-    """Write the plist and (re)start the job. Idempotent.
+    """Write ``label``'s plist and register it with launchd. Shared by both modes.
 
-    Refuses up front if the binary sits somewhere launchd cannot read it.
-    ``KeepAlive`` plus a doomed executable is a job that respawns forever and
-    never runs a line of Python - installing that and calling it success would
-    leave a machine quietly burning a process every ten seconds. ``force``
-    overrides, for anyone who has arranged the grant some other way.
+    Refuses up front on the two failures that would leave a launcher that can
+    never work: a binary in a TCC-protected folder (launchd cannot read it), and
+    the *other* launcher already installed (two owners for one pad). ``force``
+    overrides both, for anyone who has arranged things some other way.
     """
     folder = protected_location(Path(argv[0]) if argv else None)
     if folder and not force:
         return {
             "ok": False,
-            "path": str(plist_path()),
+            "path": str(plist_path(label)),
             "replaced": False,
             "warning": folder,
+            "conflict": None,
             "error": (
                 f"the freemicro binary is under ~/{folder}, which macOS does "
                 "not let\n  background agents read - launchd would respawn it "
@@ -360,15 +470,33 @@ def install(
             ),
         }
 
-    path = plist_path()
+    other = conflicting_label(on_connect)
+    if other and not force:
+        this_name = _launcher_name(label)
+        other_name = _launcher_name(other)
+        return {
+            "ok": False,
+            "path": str(plist_path(label)),
+            "replaced": False,
+            "warning": None,
+            "conflict": other,
+            "error": (
+                f"the {other_name} is already installed, and it and the "
+                f"{this_name}\n  would both try to drive the pad. Pick one - "
+                "remove the other first:\n"
+                "    freemicro daemon uninstall\n"
+                f"  then install the {this_name} again."
+            ),
+        }
+
+    path = plist_path(label)
     path.parent.mkdir(parents=True, exist_ok=True)
     log_path().parent.mkdir(parents=True, exist_ok=True)
-    payload = render_plist(argv)
     replaced = path.exists()
     # Always bootout first: launchd caches the plist at bootstrap time, so
     # rewriting the file alone leaves the old command running.
     if replaced:
-        _bootout()
+        _bootout(label)
     path.write_bytes(payload)
 
     code, out = _launchctl("bootstrap", f"gui/{os.getuid()}", str(path))
@@ -377,17 +505,52 @@ def install(
         if legacy != 0:
             return {
                 "ok": False, "path": str(path), "replaced": replaced,
-                "error": out or legacy_out,
+                "warning": None, "conflict": None, "error": out or legacy_out,
             }
-    _launchctl("enable", service_target())
-    _launchctl("kickstart", "-k", service_target())
+    _launchctl("enable", service_target(label))
+    # Only the login daemon is force-started. The on-connect agent must wait for
+    # its device event; kickstarting it would run it now, pad or no pad, which is
+    # the always-on behaviour it exists to avoid.
+    if kickstart:
+        _launchctl("kickstart", "-k", service_target(label))
     return {
         "ok": True,
         "path": str(path),
         "replaced": replaced,
         "error": "",
         "warning": protected_location(),
+        "conflict": None,
     }
+
+
+def install(
+    argv: Optional[List[str]] = None, force: bool = False
+) -> Dict[str, Any]:
+    """Write the login-time plist and (re)start the job. Idempotent.
+
+    ``KeepAlive`` plus a doomed executable is a job that respawns forever and
+    never runs a line of Python, so this refuses a binary launchd cannot read.
+    """
+    argv = argv or daemon_argv()
+    return _install(
+        LABEL, render_plist(argv), argv, force, kickstart=True, on_connect=False
+    )
+
+
+def install_on_connect(
+    argv: Optional[List[str]] = None, force: bool = False
+) -> Dict[str, Any]:
+    """Write the launch-on-connect plist and register it. Idempotent.
+
+    Does *not* start anything: the whole point is that launchd starts it when the
+    pad's HID device appears. Same TCC-folder refusal as :func:`install`, and it
+    refuses if the login daemon is already installed (see :func:`_install`).
+    """
+    argv = argv or daemon_argv()
+    return _install(
+        ONCONNECT_LABEL, render_onconnect_plist(argv), argv, force,
+        kickstart=False, on_connect=True,
+    )
 
 
 def wait_until_running(timeout: float = 10.0, settle: float = 2.0) -> Optional[int]:
@@ -448,11 +611,11 @@ def diagnose() -> str:
     return ""
 
 
-def uninstall() -> Dict[str, Any]:
+def uninstall(label: str = LABEL) -> Dict[str, Any]:
     """Stop the job, unregister it, and delete the plist. Verifies afterwards."""
-    path = plist_path()
+    path = plist_path(label)
     existed = path.exists()
-    code, out = _bootout()
+    code, out = _bootout(label)
     removed = False
     try:
         path.unlink()
@@ -466,18 +629,18 @@ def uninstall() -> Dict[str, Any]:
         }
     # An uninstall that leaves the job loaded is worse than none at all, so
     # confirm rather than assume.
-    still = launchctl_state()
+    still = launchctl_state(label)
     if still.get("loaded"):
         return {
             "ok": False, "existed": existed, "removed": removed,
-            "error": f"launchd still has {LABEL} loaded: {out}",
+            "error": f"launchd still has {label} loaded: {out}",
         }
     return {"ok": True, "existed": existed, "removed": removed, "error": ""}
 
 
-def launchctl_state() -> Dict[str, Any]:
+def launchctl_state(label: str = LABEL) -> Dict[str, Any]:
     """What launchd thinks of our job right now."""
-    code, out = _launchctl("print", service_target())
+    code, out = _launchctl("print", service_target(label))
     if code != 0:
         return {"loaded": False, "pid": None, "last_exit": None, "raw": out}
     pid: Optional[int] = None
@@ -527,25 +690,59 @@ def status() -> Dict[str, Any]:
         "lock_pid": holder.get("pid"),
         "command": " ".join(shlex.quote(a) for a in daemon_argv()),
         "protected_location": protected_location(),
+        "onconnect_installed": is_installed(ONCONNECT_LABEL),
+    }
+
+
+def onconnect_status() -> Dict[str, Any]:
+    """Everything ``freemicro daemon status --on-connect`` needs, in one dict.
+
+    Deliberately thinner than :func:`status`: an on-connect agent is *meant* to
+    be loaded-but-not-running whenever the pad is asleep, so "no pid" is the
+    normal resting state, not a fault to diagnose.
+    """
+    state = launchctl_state(ONCONNECT_LABEL)
+    holder = lock_holder() or {}
+    return {
+        "label": ONCONNECT_LABEL,
+        "plist": str(plist_path(ONCONNECT_LABEL)),
+        "installed": is_installed(ONCONNECT_LABEL),
+        "loaded": bool(state.get("loaded")),
+        "pid": state.get("pid"),
+        "vendor_id": CODEX_MICRO_VID,
+        "product_id": CODEX_MICRO_PID,
+        "lock_role": holder.get("role"),
+        "lock_pid": holder.get("pid"),
+        "command": " ".join(shlex.quote(a) for a in daemon_argv()),
+        "protected_location": protected_location(),
+        "daemon_installed": is_installed(LABEL),
     }
 
 
 __all__ = [
+    "CODEX_MICRO_PID",
+    "CODEX_MICRO_VID",
     "LABEL",
     "LOG_CAP_BYTES",
+    "ONCONNECT_LABEL",
     "PadLock",
+    "build_onconnect_plist",
     "build_plist",
+    "conflicting_label",
     "daemon_argv",
     "describe_holder",
     "install",
+    "install_on_connect",
     "is_installed",
     "is_running",
     "launchctl_state",
     "lock_holder",
     "lock_path",
     "log_path",
+    "onconnect_status",
     "plist_path",
     "read_log",
+    "render_onconnect_plist",
     "render_plist",
     "rotate_log",
     "status",

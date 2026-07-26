@@ -47,16 +47,24 @@ def no_launchd(tmp_path, monkeypatch):
     from freemicro import daemon
 
     plist = tmp_path / "LaunchAgents" / f"{daemon.LABEL}.plist"
-    monkeypatch.setattr(daemon, "plist_path", lambda: plist)
+    onconnect = tmp_path / "LaunchAgents" / f"{daemon.ONCONNECT_LABEL}.plist"
+
+    def _plist_path(label=daemon.LABEL):
+        return onconnect if label == daemon.ONCONNECT_LABEL else plist
+
+    monkeypatch.setattr(daemon, "plist_path", _plist_path)
     monkeypatch.setattr(
         daemon, "launchctl_state",
-        lambda: {"loaded": False, "pid": None, "last_exit": None, "raw": ""},
+        lambda label=daemon.LABEL: {
+            "loaded": False, "pid": None, "last_exit": None, "raw": ""
+        },
     )
 
-    def _uninstall():
-        existed = plist.exists()
+    def _uninstall(label=daemon.LABEL):
+        path = _plist_path(label)
+        existed = path.exists()
         if existed:
-            plist.unlink()
+            path.unlink()
         return {"ok": True, "existed": existed, "removed": existed, "error": ""}
 
     monkeypatch.setattr(daemon, "uninstall", _uninstall)

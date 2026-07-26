@@ -502,7 +502,10 @@ def plan(
         detail=", ".join(zones) if lighting_on else "LED control is off",
     ))
 
-    # -- the LaunchAgent ---------------------------------------------------
+    # -- the LaunchAgents --------------------------------------------------
+    # Two possible launchers, mutually exclusive but both swept: the login-time
+    # daemon and the launch-on-connect agent. Leaving either behind is an orphan
+    # LaunchAgent that would try to drive a pad after the package is gone.
     plist = daemon.plist_path()
     items.append(Item(
         key="launchagent",
@@ -510,6 +513,14 @@ def plan(
         category=LAUNCHAGENT,
         path=plist,
         present=plist.exists(),
+    ))
+    onconnect_plist = daemon.plist_path(daemon.ONCONNECT_LABEL)
+    items.append(Item(
+        key="onconnect_launchagent",
+        label="the launch-on-connect LaunchAgent",
+        category=LAUNCHAGENT,
+        path=onconnect_plist,
+        present=onconnect_plist.exists(),
     ))
 
     # -- Claude Code's hooks ----------------------------------------------
@@ -756,6 +767,20 @@ def uninstall(
                 plist_item.key, plist_item.label, ok,
                 f"removed {shorten(plist_item.path)}" if ok else error,
             )
+
+    # 1b. The launch-on-connect agent, the same way: boot it out (which stops it
+    #     if the pad happened to be connected) and delete its plist, verified.
+    onconnect_item = by_key["onconnect_launchagent"]
+    if onconnect_item.acts:
+        from freemicro import daemon
+
+        outcome = daemon.uninstall(daemon.ONCONNECT_LABEL)
+        ok = bool(outcome["ok"])
+        result.add(
+            onconnect_item.key, onconnect_item.label, ok,
+            f"removed {shorten(onconnect_item.path)}" if ok
+            else str(outcome.get("error") or "launchd would not let go"),
+        )
 
     # 2. Anything else still holding the pad, and the menu bar. SIGTERM, then
     #    watch the lock rather than trusting the signal.

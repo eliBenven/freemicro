@@ -4,6 +4,33 @@ All notable changes to FreeMicro are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-07-26
+
+### Added
+- **Launch on connect** (`freemicro daemon install --on-connect`). A LaunchAgent
+  whose `LaunchEvents` IOKit matcher starts FreeMicro the moment the Codex Micro
+  appears (matched by VID/PID over both BLE and USB), so pressing a button wakes
+  the connection and the pad comes alive with nothing running while it is away.
+  Mutually exclusive with the login daemon, swept by uninstall, and it refuses
+  from a `~/Desktop` checkout (a LaunchAgent cannot read that folder). The
+  install prints the exact `launchctl` steps to confirm it fires, since IOKit
+  matching on BLE HID is less documented than on USB.
+- **HID report map in `docs/PROTOCOL.md`.** The full 216-byte report descriptor
+  read from a real unit over BLE, decoded: boot keyboard on Report ID 1,
+  consumer on 2, mouse on 3, and the vendor `0xFF00` channel on Report ID 6 with
+  63-byte In/Out/Feature reports. It confirms, from the silicon, the channel
+  this project was built on. Captured for a firmware author building a
+  ZMK-compatible board (issue #1).
+
+Also documentation from real use and an interop request.
+
+### Changed
+- **Effort dial documented correctly.** Claude Code's `/effort` slider is driven
+  by LEFT/RIGHT arrows, not up/down, and `/effort` alone opens it on submit. The
+  shipped default keeps the dial as a pointer companion; the exact rebind for an
+  effort dial (turn sends left/right, press opens `/effort`) is now in the
+  default's notes. Corrects an earlier wrong assumption.
+
 ## [0.1.1] - 2026-07-24
 
 Fixes from the first day of real use.
@@ -286,5 +313,6 @@ The layers that predate the hardware work, and are still the backbone:
 - **There is no preset trust check yet.** A config you did not write is a
   program you did not read - see `docs/SECURITY-MODEL.md`.
 
+[0.1.2]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.2
 [0.1.1]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.1
 [0.1.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.0

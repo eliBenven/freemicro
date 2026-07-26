@@ -13,6 +13,6 @@ or the module docstrings for details.
 
 from freemicro.state import AgentState, StateStore, classify
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = ["AgentState", "StateStore", "classify", "__version__"]
