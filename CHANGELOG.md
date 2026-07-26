@@ -4,6 +4,33 @@ All notable changes to FreeMicro are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-26
+
+A batch of lighting and awareness features, plus a joystick fix.
+
+### Added
+- **Software `blink` effect.** The firmware has no hard on/off flash (only the
+  smooth `breath`), so FreeMicro blinks in software from the render tick. One
+  Agent Key can blink `error` while the others stay solid. It is also the
+  accessibility answer: a distinct effect per state is a redundant channel that
+  does not depend on colour vision. `freemicro lights --effect blink` works too.
+- **Attention flash on entry** (`lighting.flash_on`, default waiting/error): one
+  brief pulse in the state's own colour when an element enters that state.
+- **Named themes** (`lighting.theme`): `factory`, `nord`, `solarized`, and a
+  high-contrast colourblind-safe palette that leans on distinct effects.
+  Explicit per-state colours still win. Picker in the web UI.
+- **Battery cue** (off by default): a configurable low-battery look composited
+  over a zone. Reads the cached status file, never the vendor channel.
+- **Alerts** (off by default): a system sound and a Notification Center banner
+  on agent state transitions, so you are not blind when looking away.
+  `freemicro alerts --test`.
+
+### Fixed
+- **The joystick no longer stops mid-hold.** The pad falls silent while a
+  direction is held steady (a 2.1s gap was measured with the stick deflected),
+  and the 250ms stale-stop read that as a disconnect and froze the cursor. The
+  window is now 4s, clear of the real gap; release is still instant.
+
 ## [0.1.2] - 2026-07-26
 
 ### Added
@@ -313,6 +340,7 @@ The layers that predate the hardware work, and are still the backbone:
 - **There is no preset trust check yet.** A config you did not write is a
   program you did not read - see `docs/SECURITY-MODEL.md`.
 
+[0.2.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.2.0
 [0.1.2]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.2
 [0.1.1]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.1
 [0.1.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.0
