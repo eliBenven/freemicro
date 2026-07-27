@@ -1188,6 +1188,20 @@ def _print_keymap(pad) -> None:
                   "Set it to a terminal\n  app name to open a new window on an "
                   "unlit key.")
 
+    # Coexisting with Codex: the agent_keys.keys split covers presses AND
+    # lighting. Say it here, off the lighting section, because it changes what a
+    # key press does whether or not FreeMicro is even driving the LEDs: an
+    # un-owned Agent Key is Codex's entirely, so FreeMicro ignores its presses.
+    if pad.agent_keys.subset:
+        ak = pad.agent_keys
+        owned = ", ".join(f"AG{i:02d}" for i in ak.keys)
+        others = ", ".join(f"AG{i:02d}" for i in range(6) if i not in ak.keys)
+        print(f"\n  Coexisting with Codex (agent_keys.keys): FreeMicro owns "
+              f"{owned}. It\n  leaves {others} to the vendor app (Codex) "
+              "entirely - it ignores their\n  presses (no focus, no new "
+              "terminal, no bound action) and never lights them,\n  so a binding "
+              "on one never fires.")
+
     # Chords live in their own mapping, keyed by the sorted members, so a
     # listing that walks `bindings` alone shows nothing for a chord the user
     # just saved - and "it did not save" is the wrong conclusion to invite.

@@ -1387,8 +1387,26 @@ class Bridge:
 
     # -- two keys at once -------------------------------------------------
 
+    def _left_to_codex(self, input_id: str) -> bool:
+        """Whether ``input_id`` is an Agent Key we leave to the vendor app.
+
+        The ``agent_keys.keys`` split covers presses as well as lighting: an
+        un-owned Agent Key is Codex's entirely, so a press of one dispatches
+        nothing here - no focus, no new terminal, no bound action, whatever the
+        user may have bound to it - and its release is a clean no-op to match.
+        Always ``False`` under the default (all six owned), so the key path is
+        byte-identical unless a strict subset is configured.
+        """
+        return self._config.agent_keys.leaves_to_codex(input_id)
+
     def press(self, input_id: str) -> List[Dispatch]:
         """Resolve one key-down. See the class docstring for the rule."""
+        if self._left_to_codex(input_id):
+            # Codex's key. Nothing enters _unresolved or _chorded for it, so it
+            # can never start or complete a chord, trigger a layer, or take a
+            # profile override - it is inert in all of them, and its release
+            # below finds no state to unwind.
+            return []
         if input_id not in self._chord_keys:
             return _one(self.fire(input_id, True))
 
@@ -1445,6 +1463,10 @@ class Bridge:
 
     def release(self, input_id: str) -> List[Dispatch]:
         """Resolve one key-up, coherently with whatever the press resolved to."""
+        if self._left_to_codex(input_id):
+            # Its press was ignored, so there is nothing to release: no open
+            # chord, no held hold, no pending settle. A clean no-op.
+            return []
         with self._lock:
             members = self._chorded.pop(input_id, None)
             chord_action = (

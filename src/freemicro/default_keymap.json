@@ -135,8 +135,10 @@
     "COEXIST WITH CODEX. Run Codex and Claude Code at once? The ChatGPT app and",
     "FreeMicro both drive the six Agent Keys and fight over them. Give each some:",
     "add \"keys\" to the \"agent_keys\" section (e.g. \"keys\": [3, 4, 5]) to make",
-    "FreeMicro drive only those keys and leave the rest for Codex. Details are in",
-    "the \"agent_keys\" comment below and docs/CUSTOMIZING.md.",
+    "FreeMicro drive only those keys and leave the rest for Codex. The split",
+    "covers PRESSES as well as lighting: FreeMicro ignores presses on the keys it",
+    "does not own (no focus, no new terminal), so they are Codex's alone. Details",
+    "are in the \"agent_keys\" comment below and docs/CUSTOMIZING.md.",
     "",
     "Full reference: docs/CUSTOMIZING.md"
   ],
@@ -473,10 +475,14 @@
       "It maps your Claude Code projects onto only those keys and sends a partial",
       "thstatus (entries for the owned keys only), so the ChatGPT app's writes to",
       "the others persist. Omit \"keys\" (or give all six, or []) to drive every",
-      "key - the default and the shipped behaviour. While a subset is set,",
-      "FreeMicro re-sends its keys every few seconds to hold them against the",
-      "ChatGPT app (see docs/CUSTOMIZING.md); it never touches the keys it does",
-      "not own. Relies on the firmware doing partial thstatus updates."
+      "key - the default and the shipped behaviour. The split covers PRESSES as",
+      "well as lighting: an un-owned Agent Key is Codex's entirely, so FreeMicro",
+      "ignores its presses (no focus, no new terminal, no bound action) - a",
+      "binding on one never fires, and `freemicro keys --list` says which keys",
+      "are Codex's. While a subset is set, FreeMicro re-sends its keys every few",
+      "seconds to hold them against the ChatGPT app (see docs/CUSTOMIZING.md); it",
+      "never touches the keys it does not own. Relies on the firmware doing",
+      "partial thstatus updates."
     ]
   }
 }

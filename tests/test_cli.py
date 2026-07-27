@@ -339,6 +339,16 @@ def test_the_listing_says_all_six_when_not_coexisting(capsys):
     assert "Agent Keys driven: all six" in capsys.readouterr().out
 
 
+def test_the_listing_says_the_split_ignores_presses_even_with_lighting_off(capsys):
+    # The press half of the split changes what a key does whether or not
+    # FreeMicro drives the LEDs, so the note is not gated on lighting.
+    cli._print_keymap(_parsed(agent_keys={"policy": "recent", "keys": [3, 4, 5]}))
+    out = capsys.readouterr().out
+    assert "Coexisting with Codex" in out
+    assert "ignores their" in out and "presses" in out
+    assert "never fires" in out
+
+
 def test_the_listing_says_when_alerts_dim_too(capsys):
     cli._print_keymap(
         _parsed(lighting={"auto_dim_seconds": 90, "auto_dim_alerts": True})

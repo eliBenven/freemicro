@@ -481,6 +481,60 @@ def _check_layer_references(
         )
 
 
+def _check_unowned_agent_key_bindings(
+    agent_keys: AgentKeysConfig,
+    bindings: "Mapping[str, Action]",
+    chords: "Mapping[Tuple[str, ...], Action]",
+    profiles: "Mapping[str, Mapping[str, Action]]",
+    layers: "Mapping[str, Mapping[str, Action]]",
+    warnings: List[str],
+) -> None:
+    """Warn about any binding on an Agent Key ``agent_keys.keys`` leaves to Codex.
+
+    The ``keys`` split covers presses as well as lighting: when FreeMicro owns a
+    strict subset, an un-owned Agent Key is the vendor app's (Codex's) entirely
+    and FreeMicro ignores its presses. That means a binding on one - even an
+    explicit shell or key binding the user typed deliberately - never fires, on
+    purpose: "these keys are Codex's" is the whole rule, and honouring some
+    bindings while dropping the key's default focus would be a split that only
+    half held. A binding that silently never runs reads as a broken key, though,
+    so it is surfaced here rather than swallowed. Nothing to say under the
+    default (all six owned), where every Agent Key acts as it always has.
+    """
+    if agent_keys.owns_all:
+        return
+
+    def note(where: str, input_id: str) -> None:
+        warnings.append(
+            f"{where}{input_id!r} is bound, but {input_id} is not in "
+            "agent_keys.keys - FreeMicro leaves that Agent Key to the vendor app "
+            "(Codex) and ignores its presses, so this binding never fires. Add "
+            f"the key to agent_keys.keys to drive it, or move the binding to an "
+            "owned key."
+        )
+
+    for input_id in bindings:
+        if agent_keys.leaves_to_codex(input_id):
+            note("", input_id)
+    for members in chords:
+        unowned = [m for m in members if agent_keys.leaves_to_codex(m)]
+        if unowned:
+            warnings.append(
+                f"chord {chord_label(members)!r} includes {', '.join(unowned)}, "
+                "which is not in agent_keys.keys - FreeMicro leaves that Agent "
+                "Key to the vendor app (Codex) and ignores its presses, so the "
+                "chord can never form."
+            )
+    for app_name, overrides in profiles.items():
+        for input_id in overrides:
+            if agent_keys.leaves_to_codex(input_id):
+                note(f"profile {app_name!r} ", input_id)
+    for name, overrides in layers.items():
+        for input_id in overrides:
+            if agent_keys.leaves_to_codex(input_id):
+                note(f"layer {name!r} ", input_id)
+
+
 _EXIT_MODES = ("leave", "off", "breath")
 
 #: Which protocol method the LED renderer uses for the backlight/underglow.
@@ -1827,6 +1881,14 @@ def parse(data: Any, source: Optional[Path] = None) -> PadConfig:
     # profiles and layers) and the layer names are both in scope, rather than
     # failing silently the first time the key is held.
     _check_layer_references(bindings, profiles, layers, warnings)
+
+    # A binding on an Agent Key that agent_keys.keys leaves to Codex will never
+    # fire - the split covers presses, not just lighting - so it is surfaced
+    # here rather than left to read as a dead key. No-op under the all-six
+    # default.
+    _check_unowned_agent_key_bindings(
+        agent_keys, bindings, chords, profiles, layers, warnings
+    )
 
     lit = [
         (input_id, action)

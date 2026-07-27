@@ -24,6 +24,7 @@ from freemicro.agentkeys import (
     AgentKeysConfig,
     AgentKeysError,
     SlotResolver,
+    agent_key_index,
     group_projects,
     normalise_project,
     parse_agent_keys,
@@ -329,6 +330,76 @@ def test_an_un_owned_key_publishes_and_remembers_nothing():
     # AG03-AG05 are un-owned: their sticky memory stays empty so pressing them
     # focuses nothing (Codex owns them).
     assert resolver.previous[3:] == ("", "", "")
+
+
+def test_agent_key_index_maps_ids_to_indices_and_nothing_else():
+    assert agent_key_index("AG00") == 0
+    assert agent_key_index("AG05") == 5
+    # Everything that is not one of the six Agent Keys is None.
+    for other in ("AG06", "AG10", "ACT06", "JOY_UP", "AG00+AG01", "AG0", "", None):
+        assert agent_key_index(other) is None
+
+
+def test_leaves_to_codex_only_true_for_an_un_owned_agent_key():
+    config = AgentKeysConfig(keys=(3, 4, 5))
+    assert config.leaves_to_codex("AG00")
+    assert config.leaves_to_codex("AG02")
+    assert not config.leaves_to_codex("AG03")   # owned
+    assert not config.leaves_to_codex("ACT06")  # not an Agent Key
+    assert not config.leaves_to_codex("AG00+AG03")  # a chord id, not a key
+
+
+def test_the_default_never_leaves_a_key_to_codex():
+    # owns_all short-circuits, so the key path is byte-identical to before.
+    config = AgentKeysConfig()
+    assert not any(config.leaves_to_codex(f"AG{i:02d}") for i in range(6))
+
+
+# ---------------------------------------------------------------------------
+# A binding on an un-owned key is surfaced at load time, never silently dropped
+# ---------------------------------------------------------------------------
+
+def test_a_binding_on_an_un_owned_key_warns_at_load_time():
+    pad = parse({
+        "version": 1,
+        "bindings": {"AG00": {"action": "focus_session"}},
+        "agent_keys": {"policy": "recent", "keys": [3, 4, 5]},
+    })
+    assert any(
+        "AG00" in w and "not in agent_keys.keys" in w and "never fires" in w
+        for w in pad.warnings
+    )
+
+
+def test_a_chord_naming_an_un_owned_key_warns_it_can_never_form():
+    pad = parse({
+        "version": 1,
+        "bindings": {"AG00+AG03": {"action": "key", "key": "enter"}},
+        "agent_keys": {"policy": "recent", "keys": [3, 4, 5]},
+    })
+    assert any(
+        "AG00" in w and "can never form" in w for w in pad.warnings
+    )
+
+
+def test_a_profile_or_layer_binding_on_an_un_owned_key_warns():
+    pad = parse({
+        "version": 1,
+        "bindings": {"AG03": {"action": "key", "key": "escape"}},
+        "profiles": {"Terminal": {"AG00": {"action": "key", "key": "enter"}}},
+        "layers": {"fn": {"AG01": {"action": "key", "key": "tab"}}},
+        "agent_keys": {"policy": "recent", "keys": [3, 4, 5]},
+    })
+    assert any("profile 'Terminal'" in w and "AG00" in w for w in pad.warnings)
+    assert any("layer 'fn'" in w and "AG01" in w for w in pad.warnings)
+
+
+def test_no_un_owned_binding_warning_under_the_all_six_default():
+    pad = parse({
+        "version": 1,
+        "bindings": {"AG00": {"action": "focus_session"}},
+    })
+    assert not any("not in agent_keys.keys" in w for w in pad.warnings)
 
 
 # ---------------------------------------------------------------------------

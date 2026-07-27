@@ -971,6 +971,14 @@ keys only. A `thstatus` that names fewer than six keys updates just those keys
 and leaves the others as they are, which is what lets the ChatGPT app's colours
 on the un-owned keys persist.
 
+**The split covers presses as well as lighting.** An un-owned Agent Key is
+Codex's *entirely*: FreeMicro ignores its presses. Pressing `AG00` while you own
+`[3, 4, 5]` does nothing on FreeMicro's side - no focus, no new terminal window,
+no bound action at all - so Codex's own action on that key stands alone rather
+than getting a FreeMicro one on top of it. Your owned keys behave exactly as
+before, new-terminal-on-empty included, so you can leave `terminal_app` on and
+open a fresh terminal from a spare *owned* key while the Codex keys stay inert.
+
 > This relies on the firmware doing **partial `thstatus` updates** (an array of
 > three entries changes three keys, not all six). It matches the message shape
 > in [`PROTOCOL.md`](PROTOCOL.md) and is how the split is built, but it wants a
@@ -983,6 +991,11 @@ Rules and defaults:
   everything". The shipped config sets no `keys`.
 * `keys` must be whole numbers `0`-`5`, each at most once; anything else is a
   clear load error.
+* **A binding on an un-owned key never fires** - the split covers presses, so an
+  un-owned Agent Key runs no action, not even an explicit `shell` or `key` you
+  bound to it deliberately (the key is Codex's, and a half-held split is worse
+  than none). `freemicro keys --list` says which keys are Codex's, and the pad
+  warns at load time if a binding names one, so it is never silently dropped.
 * Everything composes with the split: the `mirror` policy, per-project slots, the
   mic activity light, the battery cue, blink and the attention flash all stay on
   the owned keys only. Auto-dim and blank-on-exit only darken the owned keys, so

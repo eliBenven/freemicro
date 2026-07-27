@@ -155,6 +155,23 @@ def normalise_project(path: Any) -> str:
     return text
 
 
+def agent_key_index(input_id: Any) -> Optional[int]:
+    """The Agent Key index (0-5) an input id names, or ``None``.
+
+    ``"AG03"`` -> ``3``; every other input - an action key, a joystick flick, a
+    chord id like ``"AG00+AG03"``, anything malformed - is ``None``. This is the
+    inverse of :attr:`AgentSlot.key_id`, and the one place that decides "is this
+    input one of the six Agent Keys, and which", so a caller never parses ``AG``
+    strings by hand.
+    """
+    text = str(input_id or "")
+    if len(text) == 4 and text[:2] == "AG" and text[2:].isdigit():
+        index = int(text[2:])
+        if 0 <= index < SLOT_COUNT:
+            return index
+    return None
+
+
 @dataclass(frozen=True)
 class AgentKeysConfig:
     """The parsed ``agent_keys`` section.
@@ -203,6 +220,25 @@ class AgentKeysConfig:
     def owns(self, index: int) -> bool:
         """Whether FreeMicro drives the Agent Key at ``index``."""
         return index in self.keys
+
+    def leaves_to_codex(self, input_id: Any) -> bool:
+        """Whether ``input_id`` is an Agent Key FreeMicro does not own.
+
+        The split is not only about lighting: an un-owned Agent Key is the
+        vendor app's (Codex's) entirely, so FreeMicro must ignore its *presses*
+        too - no focus, no new terminal, no bound action at all. The bridge asks
+        this before dispatching a key, so a press of AG00 while owning ``[3, 4,
+        5]`` does nothing on FreeMicro's side and Codex's own action stands.
+
+        ``False`` for every input that is not one of the six Agent Keys, and -
+        via the :attr:`owns_all` short-circuit - ``False`` for *every* input
+        under the default (all six owned), so the key path is byte-identical to
+        the behaviour before this option existed.
+        """
+        if self.owns_all:
+            return False
+        index = agent_key_index(input_id)
+        return index is not None and index not in self.keys
 
     @property
     def pins(self) -> Tuple[str, ...]:
@@ -690,6 +726,7 @@ __all__ = [
     "Project",
     "SLOT_COUNT",
     "SlotResolver",
+    "agent_key_index",
     "effective_state",
     "group_projects",
     "normalise_project",
