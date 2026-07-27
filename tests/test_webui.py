@@ -319,6 +319,44 @@ def test_api_save_then_config_reads_back_what_was_written(keymap):
     assert payload["summary"]["bindings"]["ACT12"]["kind"] == "none"
 
 
+def test_a_coexist_subset_round_trips_through_the_editor(keymap):
+    """The web UI writes agent_keys.keys; it must survive save and reload."""
+    document = json.loads(keymap.read_text(encoding="utf-8"))
+    document["agent_keys"] = {"policy": "recent", "keys": [3, 4, 5]}
+    configio.save_document(keymap, document)
+    saved = configio.read_document(keymap)
+    assert saved["agent_keys"]["keys"] == [3, 4, 5]
+    # And it parses to a real subset config.
+    assert configio.validate(saved).agent_keys.keys == (3, 4, 5)
+
+
+def test_hand_typed_string_indices_are_coerced_then_validated(keymap):
+    document = json.loads(keymap.read_text(encoding="utf-8"))
+    document["agent_keys"] = {"policy": "recent", "keys": ["3", "4"]}
+    configio.save_document(keymap, document)
+    assert configio.read_document(keymap)["agent_keys"]["keys"] == [3, 4]
+
+
+def test_a_bad_owned_key_is_refused_in_the_editor(keymap):
+    document = json.loads(keymap.read_text(encoding="utf-8"))
+    document["agent_keys"] = {"policy": "recent", "keys": [9]}
+    with pytest.raises(padconfig.PadConfigError):
+        configio.save_document(keymap, document)
+
+
+def test_the_advanced_panel_offers_the_codex_split():
+    """A reserved key must be drawable and pickable in the browser."""
+    js = _asset("app.js")
+    assert "function ownedKeysControl(" in js
+    assert "function toggleOwnedKey(" in js
+    assert "function peekOwnedKeys(" in js
+    advanced = _js_block(js, "renderAdvanced")
+    assert "Split the Agent Keys with Codex" in advanced
+    # The pad diagram marks the un-owned keys.
+    assert "reserved" in _js_block(js, "keyNode")
+    assert ".key.agent.reserved" in _asset("app.css")
+
+
 def test_schema_lists_every_registered_action_and_effect(keymap):
     from freemicro.device.lighting import EFFECTS, SOFTWARE_EFFECTS
     from freemicro.input.actions import REGISTRY

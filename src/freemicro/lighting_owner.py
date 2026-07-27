@@ -405,6 +405,24 @@ REASON_HEARTBEAT = "heartbeat"
 #: is a far worse bug than a late repaint.
 QUIET_SECONDS = 0.1
 
+#: The reassert cadence FreeMicro turns on **by itself** when ``agent_keys.keys``
+#: is a strict subset (actively coexisting with the ChatGPT app / Codex).
+#:
+#: When the split is live the vendor app writes all six keys on its own model
+#: changes and would otherwise clobber the keys we own, so the split has to be
+#: *held*: without a periodic re-send the demo shows FreeMicro's keys flicker to
+#: Codex's colour and stay there. A heartbeat is the only mechanism that heals a
+#: clobber we cannot observe (we cannot read the LEDs back), and it is safe to
+#: turn on here because our owned-key states are ``solid`` - re-sending a solid
+#: frame is invisible, where re-sending a ``breath``/``snake`` frame would hitch.
+#:
+#: **3 seconds** trades a worst-case 3 s heal against how often an animated
+#: effect (if the user configured one) would restart. It is only active while a
+#: subset is configured; the default all-six config keeps the heartbeat off
+#: (0) and pays nothing. A user who sets ``reassert.heartbeat_seconds`` explicitly
+#: overrides this entirely.
+COEXIST_HEARTBEAT_SECONDS = 3.0
+
 
 @dataclass(frozen=True)
 class LightingEvent:
@@ -755,16 +773,39 @@ class LightingOwner:
             apply_config(config)
         return LightingEvent(REASON_CONFIG, "reasserted lighting (config changed)")
 
+    def _coexist_subset(self) -> bool:
+        """True when a strict Agent-Key subset is configured (coexisting)."""
+        config = self._config
+        return config is not None and config.agent_keys.subset
+
+    def _heartbeat_seconds(self) -> float:
+        """The effective reassert cadence, 0 when off.
+
+        A user-set ``heartbeat_seconds`` always wins. Otherwise, when a strict
+        Agent-Key subset is configured we turn on a modest cadence by ourselves
+        (:data:`COEXIST_HEARTBEAT_SECONDS`) so the split actually holds against
+        the vendor app; with the default all-six config this stays 0.
+        """
+        if not self._reassert.enabled:
+            return 0.0
+        if self._reassert.heartbeat_seconds > 0.0:
+            return self._reassert.heartbeat_seconds
+        if self._coexist_subset():
+            return COEXIST_HEARTBEAT_SECONDS
+        return 0.0
+
     def _check_heartbeat(self, now: float) -> Optional[LightingEvent]:
-        if not self._reassert.heartbeat_enabled:
+        interval = self._heartbeat_seconds()
+        if interval <= 0.0:
             return None
-        if now - self._beat_at < self._reassert.heartbeat_seconds:
+        if now - self._beat_at < interval:
             return None
-        return LightingEvent(
-            REASON_HEARTBEAT,
-            "reasserted lighting (heartbeat)",
-            verbose_only=True,
+        message = (
+            "reasserted lighting (holding your Agent Keys; Codex keeps the rest)"
+            if self._reassert.heartbeat_seconds <= 0.0 and self._coexist_subset()
+            else "reasserted lighting (heartbeat)"
         )
+        return LightingEvent(REASON_HEARTBEAT, message, verbose_only=True)
 
     # -- internals --------------------------------------------------------
 
@@ -809,6 +850,7 @@ __all__ = [
     "CAPABILITIES",
     "CAPABILITY_INPUT",
     "CAPABILITY_LIGHTING",
+    "COEXIST_HEARTBEAT_SECONDS",
     "ActivityOverlay",
     "Conflict",
     "Contention",

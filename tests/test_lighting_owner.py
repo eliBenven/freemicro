@@ -19,6 +19,7 @@ from freemicro import lighting_owner
 from freemicro.lighting_owner import (
     CAPABILITY_INPUT,
     CAPABILITY_LIGHTING,
+    COEXIST_HEARTBEAT_SECONDS,
     QUIET_SECONDS,
     REASON_CONFIG,
     REASON_CONFIG_BROKEN,
@@ -483,6 +484,63 @@ def test_a_real_trigger_beats_the_heartbeat_to_it():
 
     assert [e.reason for e in owner.poll()] == [REASON_VENDOR_QUIT]
     assert renderer.invalidations == 1
+
+
+def _subset_pad(keys, **lighting):
+    section = {"enabled": True, "zones": ["agent_keys"]}
+    section.update(lighting)
+    return parse({
+        "version": 1, "bindings": {},
+        "agent_keys": {"policy": "recent", "keys": keys},
+        "lighting": section,
+    })
+
+
+def test_a_subset_config_turns_on_a_reassert_cadence_by_itself():
+    """Coexisting with Codex, the split must be held or the owned keys flicker.
+
+    The default all-six config has no heartbeat; a strict subset auto-enables a
+    modest one so the vendor app cannot leave our keys showing its colour.
+    """
+    owner, clock, renderer, _ = _owner(config=_subset_pad([3, 4, 5]))
+    clock.advance(COEXIST_HEARTBEAT_SECONDS - 0.1)
+    assert owner.poll() == []
+    clock.advance(0.2)
+    (event,) = owner.poll()
+    assert event.reason == REASON_HEARTBEAT
+    assert event.reasserted is True
+    assert event.verbose_only is True          # periodic, so quiet by default
+    assert "Codex" in event.message
+    assert renderer.invalidations == 1
+
+
+def test_the_default_all_six_config_has_no_auto_heartbeat():
+    owner, clock, renderer, _ = _owner(config=_subset_pad([0, 1, 2, 3, 4, 5]))
+    for _ in range(400):
+        clock.advance(0.25)
+        assert owner.poll() == []
+    assert renderer.invalidations == 0
+
+
+def test_an_explicit_heartbeat_overrides_the_coexist_default():
+    owner, clock, renderer, _ = _owner(
+        config=_subset_pad([4, 5], reassert={"heartbeat_seconds": 10.0})
+    )
+    clock.advance(COEXIST_HEARTBEAT_SECONDS + 0.5)
+    assert owner.poll() == []                   # not yet - the user asked for 10s
+    clock.advance(10.0)
+    (event,) = owner.poll()
+    assert event.reason == REASON_HEARTBEAT
+    assert event.message == "reasserted lighting (heartbeat)"
+
+
+def test_a_subset_heartbeat_still_stands_down_while_keys_are_pressed():
+    """The channel belongs to the keys - a reassert never lags a keypress."""
+    owner, clock, renderer, _ = _owner(config=_subset_pad([3, 4, 5]))
+    clock.advance(COEXIST_HEARTBEAT_SECONDS + 1.0)
+    owner.note_input()                          # a burst is in flight
+    assert owner.poll() == []
+    assert renderer.invalidations == 0
 
 
 def test_reassert_can_be_switched_off_entirely():

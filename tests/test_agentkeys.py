@@ -203,6 +203,135 @@ def test_the_shipped_default_ships_the_section():
 
 
 # ---------------------------------------------------------------------------
+# Owned keys: coexisting with the ChatGPT app (Codex)
+# ---------------------------------------------------------------------------
+
+def test_the_default_owns_all_six_keys():
+    config = parse_agent_keys(None)
+    assert config.keys == (0, 1, 2, 3, 4, 5)
+    assert config.owns_all is True
+    assert config.subset is False
+    # And the round-trip stays the old two-field shape, no `keys` added.
+    assert config.to_dict() == {"policy": "recent", "slots": [""] * SLOT_COUNT}
+
+
+def test_a_strict_subset_is_recognised_and_round_trips():
+    config = parse_agent_keys({"policy": "recent", "keys": [4, 5, 3]})
+    assert config.keys == (3, 4, 5)      # sorted
+    assert config.subset is True
+    assert config.owns(3) and config.owns(5)
+    assert not config.owns(0)
+    assert config.to_dict() == {
+        "policy": "recent", "slots": [""] * SLOT_COUNT, "keys": [3, 4, 5],
+    }
+
+
+def test_all_six_or_empty_means_drive_everything():
+    """An empty list and a full list both collapse to 'own all', no `keys`."""
+    for raw in ([], [0, 1, 2, 3, 4, 5], [5, 4, 3, 2, 1, 0]):
+        config = parse_agent_keys({"policy": "recent", "keys": raw})
+        assert config.owns_all is True
+        assert "keys" not in config.to_dict()
+
+
+@pytest.mark.parametrize(
+    "raw, message",
+    [
+        ({"keys": [6]}, "indices are 0-5"),
+        ({"keys": [-1]}, "indices are 0-5"),
+        ({"keys": [3, 3]}, "twice"),
+        ({"keys": ["3"]}, "whole numbers"),
+        ({"keys": [True]}, "whole numbers"),
+        ({"keys": [1.5]}, "whole numbers"),
+        ({"keys": "345"}, "must be a list"),
+    ],
+)
+def test_bad_owned_keys_are_rejected_with_a_useful_message(raw, message):
+    with pytest.raises(AgentKeysError) as exc:
+        parse_agent_keys({"policy": "recent", **raw})
+    assert message in str(exc.value)
+
+
+def test_a_direct_config_normalises_its_owned_keys():
+    """Constructing a config (the web UI round-trip) validates too."""
+    assert AgentKeysConfig(keys=()).keys == (0, 1, 2, 3, 4, 5)
+    assert AgentKeysConfig(keys=(5, 3, 4)).keys == (3, 4, 5)
+    with pytest.raises(AgentKeysError):
+        AgentKeysConfig(keys=(9,))
+
+
+def test_projects_only_land_on_owned_keys():
+    """A subset never allocates onto an un-owned key, and marks the rest."""
+    config = AgentKeysConfig(policy=POLICY_RECENT, keys=(3, 4, 5))
+    slots = resolve_slots(
+        config,
+        [
+            session("a", AgentState.WORKING, "/code/api", NOW),
+            session("b", AgentState.WORKING, "/code/web", NOW - 5),
+        ],
+        now=NOW,
+    )
+    # Owned keys fill from their lowest index (3), newest first.
+    assert [s.owned for s in slots] == [False, False, False, True, True, True]
+    assert slots[3].path == "/code/api"
+    assert slots[4].path == "/code/web"
+    assert all(s.empty for s in slots[:3])
+    # The un-owned slots describe themselves as left for the vendor app.
+    assert "Codex" in slots[0].describe()
+    assert slots[0].to_dict()["owned"] is False
+
+
+def test_a_pin_on_an_un_owned_key_is_not_honoured():
+    config = AgentKeysConfig(policy=POLICY_PINNED, slots=("/code/api",) + ("",) * 5,
+                             keys=(3, 4, 5))
+    slots = resolve_slots(
+        config,
+        [session("a", AgentState.WORKING, "/code/api", NOW)],
+        now=NOW,
+    )
+    # AG00 is pinned to /code/api but un-owned, so it stays empty; the live
+    # project instead lands on the lowest owned key.
+    assert slots[0].empty and not slots[0].owned
+    assert slots[3].path == "/code/api"
+
+
+def test_a_subset_never_strands_a_live_project_off_the_owned_keys():
+    """Seven live projects, three owned keys: the owned keys carry three."""
+    live = [
+        session(f"s{i}", AgentState.WORKING, f"/code/p{i}", NOW + i)
+        for i in range(7)
+    ]
+    config = AgentKeysConfig(keys=(0, 1, 2))
+    slots = resolve_slots(config, live, now=NOW + 10)
+    owned = [s for s in slots if s.owned]
+    assert len(owned) == 3
+    assert all(not s.empty for s in owned)     # every owned key is carrying one
+    assert all(s.empty for s in slots if not s.owned)
+
+
+def test_a_pin_on_an_un_owned_key_warns_at_load_time():
+    pad = parse({
+        "version": 1, "bindings": {},
+        "agent_keys": {
+            "policy": "pinned",
+            "slots": ["/code/api", "", "", "", "", ""],
+            "keys": [3, 4, 5],
+        },
+    })
+    assert any("not in agent_keys.keys" in w for w in pad.warnings)
+
+
+def test_an_un_owned_key_publishes_and_remembers_nothing():
+    resolver = SlotResolver(config=AgentKeysConfig(keys=(0, 1, 2)))
+    resolver.resolve(
+        [session("a", AgentState.WORKING, "/code/api", NOW)], now=NOW
+    )
+    # AG03-AG05 are un-owned: their sticky memory stays empty so pressing them
+    # focuses nothing (Codex owns them).
+    assert resolver.previous[3:] == ("", "", "")
+
+
+# ---------------------------------------------------------------------------
 # Grouping sessions into projects
 # ---------------------------------------------------------------------------
 

@@ -324,6 +324,21 @@ def test_the_listing_says_when_auto_dim_is_switched_off(capsys):
     assert "auto-dim: off" in capsys.readouterr().out
 
 
+def test_the_listing_names_the_keys_left_for_codex(capsys):
+    cli._print_keymap(_parsed(
+        lighting={"enabled": True, "zones": ["agent_keys"]},
+        agent_keys={"policy": "recent", "keys": [3, 4, 5]},
+    ))
+    out = capsys.readouterr().out
+    assert "Agent Keys driven: AG03, AG04, AG05" in out
+    assert "AG00, AG01, AG02 left for the vendor app (Codex)" in out
+
+
+def test_the_listing_says_all_six_when_not_coexisting(capsys):
+    cli._print_keymap(_parsed(lighting={"enabled": True, "zones": ["agent_keys"]}))
+    assert "Agent Keys driven: all six" in capsys.readouterr().out
+
+
 def test_the_listing_says_when_alerts_dim_too(capsys):
     cli._print_keymap(
         _parsed(lighting={"auto_dim_seconds": 90, "auto_dim_alerts": True})

@@ -369,6 +369,13 @@ def normalise(document: Mapping[str, Any]) -> Dict[str, Any]:
                 joystick[field] = _as_number(joystick[field])
         if "tap_click" in joystick:
             joystick["tap_click"] = _as_bool(joystick["tap_click"])
+
+    # agent_keys.keys is a list of Agent Key indices. A browser control writes
+    # real integers, but coerce numeric strings too so a hand-typed "3" fails in
+    # the editor (with the field named) rather than at load.
+    agent_keys = data.get("agent_keys")
+    if isinstance(agent_keys, dict) and isinstance(agent_keys.get("keys"), list):
+        agent_keys["keys"] = [_as_number(k) for k in agent_keys["keys"]]
     return data
 
 

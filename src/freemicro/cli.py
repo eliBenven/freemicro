@@ -1272,6 +1272,19 @@ def _print_keymap(pad) -> None:
     status = "on" if lighting.enabled else "off"
     print(f"  enabled: {status}   zones: {', '.join(lighting.zones)}"
           f"   on exit: {lighting.on_exit}")
+    # Which of the six Agent Keys FreeMicro actually drives. Only interesting
+    # when it drives them at all and when it is a subset (coexisting with the
+    # ChatGPT app / Codex): the all-six default needs no line.
+    if lighting.drives_agent_keys:
+        ak = pad.agent_keys
+        if ak.subset:
+            owned = ", ".join(f"AG{i:02d}" for i in ak.keys)
+            others = ", ".join(f"AG{i:02d}" for i in range(6) if i not in ak.keys)
+            print(f"  Agent Keys driven: {owned}")
+            print(f"  {others} left for the vendor app (Codex) - FreeMicro "
+                  "never writes them, so its lighting stays put.")
+        else:
+            print("  Agent Keys driven: all six")
     # Auto-dim is invisible until something is printed about it, and a pad that
     # has blanked itself after three minutes looks exactly like a pad that has
     # stopped working. Say the number.

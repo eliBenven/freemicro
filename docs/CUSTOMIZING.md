@@ -949,6 +949,58 @@ glance; you gain colours nothing ever repaints. `agent_keys` remains the default
 because the per-key detail is the better default when nothing is competing for
 it.
 
+**3. Split the six Agent Keys - give Codex some, keep the rest.**
+
+If you run Codex *and* Claude Code, the ChatGPT app lights all six Agent Keys for
+Codex and FreeMicro lights them for Claude Code, and you get a tug of war. You
+cannot tell the ChatGPT app to use fewer keys - but you can tell FreeMicro to.
+Set `agent_keys.keys` to the physical key indices (`0`-`5`) FreeMicro should
+own, and it leaves the rest untouched:
+
+```json
+"agent_keys": {
+  "policy": "recent",
+  "keys": [3, 4, 5]
+}
+```
+
+Now FreeMicro drives `AG03`-`AG05` (your Claude Code projects map onto those
+three keys only) and never writes `AG00`-`AG02`, so Codex keeps them. It does
+this by sending a **partial `thstatus`** - an array with entries for the owned
+keys only. A `thstatus` that names fewer than six keys updates just those keys
+and leaves the others as they are, which is what lets the ChatGPT app's colours
+on the un-owned keys persist.
+
+> This relies on the firmware doing **partial `thstatus` updates** (an array of
+> three entries changes three keys, not all six). It matches the message shape
+> in [`PROTOCOL.md`](PROTOCOL.md) and is how the split is built, but it wants a
+> quick confirmation on real hardware.
+
+Rules and defaults:
+
+* **Omitting `keys` drives all six** - the default, byte-for-byte the behaviour
+  before this option existed. An empty list `[]` or all six also means "drive
+  everything". The shipped config sets no `keys`.
+* `keys` must be whole numbers `0`-`5`, each at most once; anything else is a
+  clear load error.
+* Everything composes with the split: the `mirror` policy, per-project slots, the
+  mic activity light, the battery cue, blink and the attention flash all stay on
+  the owned keys only. Auto-dim and blank-on-exit only darken the owned keys, so
+  Codex's keys are never blanked by FreeMicro either.
+* **Holding the split.** The ChatGPT app writes all six keys on its own model
+  changes and would periodically clobber the keys you own. So while a subset is
+  configured, FreeMicro turns on a modest reassert cadence by itself (every ~3 s)
+  and re-sends its owned keys - just those keys, never the ones Codex has. Without
+  this the pad would show your keys flicker to Codex's colour and stay there. The
+  cadence is only on while a subset is set; with the default all-six config there
+  is no heartbeat and no added traffic. The trade-off is the general heartbeat
+  one - each re-send restarts an animated effect - but the owned-key states are
+  `solid`, so a re-send is invisible; set `reassert.heartbeat_seconds` yourself to
+  override the cadence.
+
+`freemicro keys --list` prints which keys FreeMicro drives and which are left for
+Codex.
+
 ## Runtime prefs (a different file)
 
 `~/.freemicro/config.json` holds runtime preferences - renderer `prefer` order,

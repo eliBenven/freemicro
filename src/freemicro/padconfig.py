@@ -1716,7 +1716,13 @@ def _parse_agent_keys(raw: Any, warnings: List[str]) -> AgentKeysConfig:
 
     if config.policy in (POLICY_PINNED, POLICY_MANUAL):
         for index, pin in enumerate(config.slots):
-            if pin and not Path(pin).is_dir():
+            if pin and not config.owns(index):
+                warnings.append(
+                    f"agent_keys.slots[{index}] pins AG{index:02d} to {pin!r}, "
+                    "but that key is not in agent_keys.keys - FreeMicro leaves "
+                    "it to the vendor app (Codex), so the pin is ignored."
+                )
+            elif pin and not Path(pin).is_dir():
                 warnings.append(
                     f"agent_keys.slots[{index}] pins AG{index:02d} to {pin!r}, "
                     "which is not a directory right now - that key will stay "

@@ -132,6 +132,12 @@
     "  overrides to the fn layer and set \"joystick\": {\"mode\": \"directions\"} -",
     "  pointer mode consumes the stick, so the flicks need directions mode.",
     "",
+    "COEXIST WITH CODEX. Run Codex and Claude Code at once? The ChatGPT app and",
+    "FreeMicro both drive the six Agent Keys and fight over them. Give each some:",
+    "add \"keys\" to the \"agent_keys\" section (e.g. \"keys\": [3, 4, 5]) to make",
+    "FreeMicro drive only those keys and leave the rest for Codex. Details are in",
+    "the \"agent_keys\" comment below and docs/CUSTOMIZING.md.",
+    "",
     "Full reference: docs/CUSTOMIZING.md"
   ],
   "keycaps": {
@@ -456,7 +462,21 @@
       "Slots are STICKY: once a project holds a key it keeps it for as long as",
       "it is live, however the activity order moves around it. Only a key that",
       "has been vacated is refilled - so a glance always means the same thing.",
-      "`freemicro status` prints the current assignment."
+      "`freemicro status` prints the current assignment.",
+      "",
+      "COEXIST WITH CODEX. Run both Codex and Claude Code? The ChatGPT app drives",
+      "all six Agent Keys for Codex; FreeMicro drives them for Claude Code, and",
+      "the last write wins. FreeMicro cannot make the ChatGPT app limit itself,",
+      "but it can limit ITSELF: add \"keys\" to give FreeMicro only some of the",
+      "six and leave the rest for Codex.",
+      "  \"keys\": [3, 4, 5]   FreeMicro drives AG03-AG05; AG00-AG02 stay Codex's",
+      "It maps your Claude Code projects onto only those keys and sends a partial",
+      "thstatus (entries for the owned keys only), so the ChatGPT app's writes to",
+      "the others persist. Omit \"keys\" (or give all six, or []) to drive every",
+      "key - the default and the shipped behaviour. While a subset is set,",
+      "FreeMicro re-sends its keys every few seconds to hold them against the",
+      "ChatGPT app (see docs/CUSTOMIZING.md); it never touches the keys it does",
+      "not own. Relies on the firmware doing partial thstatus updates."
     ]
   }
 }

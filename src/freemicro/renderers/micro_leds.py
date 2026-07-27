@@ -140,7 +140,6 @@ from freemicro.device.lighting import (
     ZONE_AGENT_KEYS,
     ZONE_BACKLIGHT,
     ZONE_UNDERGLOW,
-    all_agent_keys,
     parse_effect,
     preview_message,
     rgbcfg_message,
@@ -453,6 +452,20 @@ class MicroLedsRenderer(Renderer):
     @property
     def lighting(self) -> LightingConfig:
         return self.config.lighting
+
+    @property
+    def owned_keys(self) -> Tuple[int, ...]:
+        """The Agent Key indices FreeMicro drives, in ``AG00``-``AG05`` order.
+
+        All six unless ``agent_keys.keys`` names a strict subset to coexist with
+        the ChatGPT desktop app (Codex). Every ``thstatus`` this renderer builds
+        - per-slot state, the mirrored look, an overlay or battery layer that
+        seizes the whole zone, and the blank/exit frame - is restricted to these
+        keys, so the keys we do not own are never in a message we send and the
+        vendor app's writes to them persist. With the default all-six set this
+        is ``(0, 1, 2, 3, 4, 5)`` and every builder is byte-identical to before.
+        """
+        return self.config.agent_keys.keys
 
     def apply_config(self, config: PadConfig) -> None:
         """Swap in a freshly loaded config while we are running.
@@ -904,27 +917,49 @@ class MicroLedsRenderer(Renderer):
         # across six when we do not.
         agent_msg: Optional[dict] = None
         if overlay is not None and ZONE_AGENT_KEYS in overlay.zones:
-            agent_msg = self._mirror_message(eff(overlay, None))
+            agent_msg = self._agent_keys_message(eff(overlay, None))
         elif battery_light is not None and battery_zone == ZONE_AGENT_KEYS:
-            agent_msg = self._mirror_message(eff(battery_light, None))
+            agent_msg = self._agent_keys_message(eff(battery_light, None))
         elif ZONE_AGENT_KEYS in lighting.zones:
             if slots is not None and light is None:
+                # Only the owned keys: an un-owned slot is never allocated a
+                # project (it comes back ``owned=False``) and is left out of the
+                # message entirely, so Codex's colour on that key persists. With
+                # the default all-six set every slot is owned and this is the
+                # full six-entry array it always was.
                 agent_msg = thstatus_message(
-                    self._slot_entry(slot, now) for slot in slots
+                    self._slot_entry(slot, now)
+                    for slot in slots
+                    if slot.owned
                 )
             else:
-                agent_msg = self._mirror_message(eff(base, "state"))
+                agent_msg = self._agent_keys_message(eff(base, "state"))
         elif ZONE_AGENT_KEYS in extra:
-            agent_msg = self._mirror_message(_DARK)
+            agent_msg = self._agent_keys_message(_DARK)
         if agent_msg is not None:
             messages.append(agent_msg)
         return messages
 
-    @staticmethod
-    def _mirror_message(light: StateLight) -> dict:
-        """One look across all six Agent Keys."""
-        return all_agent_keys(
-            light.color, light.effect, light.brightness, light.speed
+    def _agent_keys_message(self, light: StateLight) -> dict:
+        """One look across every Agent Key we own (all six by default).
+
+        Built here from :func:`thread_entry` rather than :func:`all_agent_keys`
+        so the owned-key restriction lives entirely in this renderer: a subset
+        config (coexisting with Codex) yields a *partial* ``thstatus`` - an array
+        with an entry for each owned key only, which the firmware treats as an
+        update of just those keys and leaves the rest as Codex set them. With the
+        default all-six set this is byte-identical to :func:`all_agent_keys`.
+        This relies on the firmware doing partial ``thstatus`` updates
+        (``docs/PROTOCOL.md``); it wants a quick real-hardware confirmation.
+
+        The mirror policy, a held-key overlay and the battery cue all go through
+        here, so none of them ever touch a key we do not own.
+        """
+        return thstatus_message(
+            thread_entry(
+                index, light.color, light.effect, light.brightness, light.speed
+            )
+            for index in self.owned_keys
         )
 
     def _effective_look(
@@ -1142,11 +1177,9 @@ class MicroLedsRenderer(Renderer):
                 )
             )
         if drives[ZONE_AGENT_KEYS]:
-            messages.append(
-                all_agent_keys(
-                    light.color, light.effect, light.brightness, light.speed
-                )
-            )
+            # Blank and exit frames only ever touch the keys we own, so
+            # auto-dim and blank-on-exit never darken a key Codex is driving.
+            messages.append(self._agent_keys_message(light))
         return messages
 
     def _blank_messages(self, lighting: Optional[LightingConfig] = None) -> List[dict]:

@@ -207,6 +207,112 @@ def test_mirror_policy_keeps_the_single_colour_behaviour():
     assert all(e["c"] == 0x00FF00 for e in thstatus["p"])
 
 
+# ---------------------------------------------------------------------------
+# Coexisting with the ChatGPT app (Codex): drive only a subset of the keys
+# ---------------------------------------------------------------------------
+
+class _SessionStore:
+    def __init__(self, sessions):
+        self._sessions = list(sessions)
+
+    def sessions(self):
+        return list(self._sessions)
+
+
+def _working(cwd, at=None):
+    import time
+
+    from freemicro.state.engine import SessionState
+
+    return SessionState(
+        session_id=cwd, state=AgentState.WORKING,
+        updated_at=time.time() if at is None else at, cwd=cwd,
+    )
+
+
+def _subset_config(keys):
+    return parse({
+        "version": 1, "bindings": {},
+        "agent_keys": {"policy": "recent", "keys": keys},
+        "lighting": {"enabled": True, "zones": ["agent_keys"],
+                     "states": {"working": {"color": "#0000FF"}}},
+    })
+
+
+def test_a_subset_sends_a_partial_thstatus_for_owned_keys_only():
+    """The crux: entries for the owned keys only, so Codex's keys persist."""
+    config = _subset_config([3, 4, 5])
+    device = FakeDevice()
+    store = _SessionStore([_working("/code/api")])
+    renderer = MicroLedsRenderer(device=device, config=config, store=store)
+    renderer.render(AgentState.WORKING)
+    thstatus = device.sent[0]
+    assert thstatus["m"] == METHOD_THREAD_STATUS
+    # Fewer than six entries, and only the owned ids - nothing for AG00-AG02.
+    assert [e["id"] for e in thstatus["p"]] == [3, 4, 5]
+    # The lowest owned key carries the one live project; the others are dark.
+    assert thstatus["p"][0]["c"] == 0x0000FF
+    assert thstatus["p"][1]["c"] == 0 and thstatus["p"][1]["b"] == 0.0
+
+
+def test_owned_keys_property_reflects_the_config():
+    assert MicroLedsRenderer(config=_subset_config([1, 2])).owned_keys == (1, 2)
+    assert MicroLedsRenderer(config=CONFIG).owned_keys == (0, 1, 2, 3, 4, 5)
+
+
+def test_the_default_all_six_config_still_addresses_every_key():
+    """Zero behaviour change when no subset is set - byte-identical ids."""
+    config = _subset_config([0, 1, 2, 3, 4, 5])
+    device = FakeDevice()
+    renderer = MicroLedsRenderer(
+        device=device, config=config, store=_SessionStore([])
+    )
+    renderer.render(AgentState.IDLE)
+    assert [e["id"] for e in device.sent[0]["p"]] == [0, 1, 2, 3, 4, 5]
+
+
+def test_a_subset_mirror_policy_still_only_drives_owned_keys():
+    config = parse({
+        "version": 1, "bindings": {},
+        "agent_keys": {"policy": "mirror", "keys": [0, 1]},
+        "lighting": {"enabled": True, "zones": ["agent_keys"],
+                     "states": {"done": {"color": "#00FF00"}}},
+    })
+    device = FakeDevice()
+    renderer = _renderer(config=config, device=device)
+    renderer.render(AgentState.DONE)
+    thstatus = device.sent[0]
+    assert [e["id"] for e in thstatus["p"]] == [0, 1]
+    assert all(e["c"] == 0x00FF00 for e in thstatus["p"])
+
+
+def test_blank_on_exit_only_darkens_owned_keys():
+    """Auto-dim and exit never blank a key Codex is driving."""
+    config = parse({"version": 1, "bindings": {},
+                    "agent_keys": {"policy": "recent", "keys": [4, 5]},
+                    "lighting": {"enabled": True, "on_exit": "off",
+                                 "zones": ["agent_keys"],
+                                 "states": {"idle": {"color": "#111111"}}}})
+    device = FakeDevice()
+    renderer = _renderer(config=config, device=device)
+    renderer.close()
+    assert [e["id"] for e in device.sent[0]["p"]] == [4, 5]
+
+
+def test_an_overlay_seizing_the_agent_keys_stays_on_owned_keys():
+    from freemicro.padconfig import ActivityLight
+
+    config = _subset_config([2, 3])
+    renderer = _renderer(config=config, device=FakeDevice())
+    overlay = ActivityLight(
+        color=parse_color("#2E8B57"), effect=2, brightness=1.0, speed=0.4,
+        zones=("agent_keys",),
+    )
+    msgs = renderer.messages_for(AgentState.IDLE, overlay=overlay, now=1000.0)
+    thstatus = next(m for m in msgs if m["m"] == METHOD_THREAD_STATUS)
+    assert [e["id"] for e in thstatus["p"]] == [2, 3]
+
+
 def test_lights_preview_is_not_used_by_default():
     """Firmware v0.4.1 accepts it and lights nothing - see docs/PROTOCOL.md."""
     device = FakeDevice()

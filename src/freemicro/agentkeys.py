@@ -65,7 +65,7 @@ import os
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from freemicro.state.engine import (
     DEFAULT_DECAY,
@@ -107,6 +107,37 @@ class AgentKeysError(ValueError):
 # Configuration
 # ---------------------------------------------------------------------------
 
+def _clean_owned_keys(raw: Iterable[Any]) -> Tuple[int, ...]:
+    """Normalise ``agent_keys.keys`` to a sorted tuple of owned indices.
+
+    Empty means "drive everything" - the same as all six - so both the absent
+    case and an explicit ``[]`` collapse to ``(0, 1, 2, 3, 4, 5)``. Anything
+    that is not a whole number 0-5, and any repeat, is a hard error: a light
+    that silently drives the wrong physical key is worse than one that refuses
+    to load.
+    """
+    seen: List[int] = []
+    for entry in raw:
+        if isinstance(entry, bool) or not isinstance(entry, int):
+            raise AgentKeysError(
+                "agent_keys.keys entries must be whole numbers 0-"
+                f"{SLOT_COUNT - 1}, got {entry!r}"
+            )
+        if not 0 <= entry < SLOT_COUNT:
+            raise AgentKeysError(
+                f"agent_keys.keys has {entry}; Agent Key indices are 0-"
+                f"{SLOT_COUNT - 1}"
+            )
+        if entry in seen:
+            raise AgentKeysError(
+                f"agent_keys.keys lists key {entry} twice; each Agent Key is "
+                "owned once or not at all"
+            )
+        seen.append(entry)
+    if not seen:
+        return tuple(range(SLOT_COUNT))
+    return tuple(sorted(seen))
+
 def normalise_project(path: Any) -> str:
     """Canonical form of a project directory, for comparison and display.
 
@@ -130,14 +161,48 @@ class AgentKeysConfig:
 
     ``slots`` is always exactly :data:`SLOT_COUNT` long, one entry per Agent Key
     in ``AG00``-``AG05`` order, each a normalised project path or ``""``.
+
+    ``keys`` is the set of physical Agent Key indices (0-5) FreeMicro *owns* -
+    the keys it is allowed to light. The default is all six, which is
+    byte-identical to the behaviour before this field existed. Setting it to a
+    strict subset (e.g. ``[3, 4, 5]``) is how FreeMicro coexists with the
+    ChatGPT desktop app driving Codex: the ChatGPT app cannot be told to limit
+    itself, but FreeMicro can limit *itself* to a chosen subset and leave the
+    rest for Codex. See :meth:`subset` and the ``thstatus`` builder in
+    :mod:`freemicro.renderers.micro_leds`.
     """
 
     policy: str = POLICY_RECENT
     slots: Tuple[str, ...] = ("",) * SLOT_COUNT
+    keys: Tuple[int, ...] = tuple(range(SLOT_COUNT))
 
     def __post_init__(self) -> None:
         if len(self.slots) != SLOT_COUNT:  # pragma: no cover - guarded in parse
             raise AgentKeysError(f"agent_keys.slots must have {SLOT_COUNT} entries")
+        # Normalise here too, so constructing a config directly (the tests, the
+        # web UI round-trip) gets the same sorted, validated, empty-means-all
+        # invariant that :func:`parse_agent_keys` gives the file.
+        object.__setattr__(self, "keys", _clean_owned_keys(self.keys))
+
+    @property
+    def owns_all(self) -> bool:
+        """True when FreeMicro drives every Agent Key - the default."""
+        return len(self.keys) == SLOT_COUNT
+
+    @property
+    def subset(self) -> bool:
+        """True when a strict subset is owned, i.e. we are coexisting.
+
+        This is the switch the whole feature turns on: a partial ``thstatus``,
+        a reassert cadence to hold the split, and the reserved-key markings in
+        the UI all key off it. When it is ``False`` there is zero behaviour
+        change and zero added cost.
+        """
+        return not self.owns_all
+
+    def owns(self, index: int) -> bool:
+        """Whether FreeMicro drives the Agent Key at ``index``."""
+        return index in self.keys
 
     @property
     def pins(self) -> Tuple[str, ...]:
@@ -156,8 +221,16 @@ class AgentKeysConfig:
         return self.policy == POLICY_MIRROR
 
     def to_dict(self) -> Dict[str, Any]:
-        """Round-trip form - the exact shape the web UI reads and writes."""
-        return {"policy": self.policy, "slots": list(self.slots)}
+        """Round-trip form - the exact shape the web UI reads and writes.
+
+        ``keys`` is emitted only when it is a strict subset, so the common
+        all-six case stays the ``{"policy", "slots"}`` shape it has always been
+        and no shipped default grows a field it does not need.
+        """
+        out: Dict[str, Any] = {"policy": self.policy, "slots": list(self.slots)}
+        if self.subset:
+            out["keys"] = list(self.keys)
+        return out
 
 
 def parse_agent_keys(raw: Any) -> AgentKeysConfig:
@@ -173,7 +246,7 @@ def parse_agent_keys(raw: Any) -> AgentKeysConfig:
     if not isinstance(raw, Mapping):
         raise AgentKeysError('"agent_keys" must be an object')
 
-    unknown = set(raw) - {"policy", "slots", "comment", "_comment"}
+    unknown = set(raw) - {"policy", "slots", "keys", "comment", "_comment"}
     if unknown:
         raise AgentKeysError(
             "agent_keys has unknown field(s): " + ", ".join(sorted(unknown))
@@ -209,7 +282,19 @@ def parse_agent_keys(raw: Any) -> AgentKeysConfig:
             )
         slots.append(normalise_project(entry))
     slots.extend([""] * (SLOT_COUNT - len(slots)))
-    return AgentKeysConfig(policy=policy, slots=tuple(slots))
+
+    keys_raw = raw.get("keys")
+    if keys_raw is None:
+        keys = tuple(range(SLOT_COUNT))
+    elif isinstance(keys_raw, (str, bytes)) or not isinstance(keys_raw, Sequence):
+        raise AgentKeysError(
+            '"agent_keys.keys" must be a list of Agent Key indices (0-5); an '
+            "empty list or all six means drive every key"
+        )
+    else:
+        keys = _clean_owned_keys(keys_raw)
+
+    return AgentKeysConfig(policy=policy, slots=tuple(slots), keys=keys)
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +459,11 @@ class AgentSlot:
     path: str = ""
     project: Optional[Project] = None
     pinned: bool = False
+    #: Whether FreeMicro drives this Agent Key at all. ``False`` for a key the
+    #: user left to the ChatGPT app (Codex): it is never allocated a project
+    #: and the renderer omits it from ``thstatus`` entirely, so Codex's own
+    #: colour on that key persists. See :attr:`AgentKeysConfig.subset`.
+    owned: bool = True
 
     @property
     def empty(self) -> bool:
@@ -421,6 +511,8 @@ class AgentSlot:
             return f"{self.label} - {state}{extra}"
         if self.reserved:
             return f"{self.label} - pinned, not running"
+        if not self.owned:
+            return "(left for the vendor app / Codex)"
         return "(empty)"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -433,6 +525,7 @@ class AgentSlot:
             "last_active": self.last_active,
             "pinned": self.pinned,
             "empty": self.empty,
+            "owned": self.owned,
             "sessions": self.project.session_count if self.project else 0,
         }
 
@@ -460,12 +553,21 @@ def resolve_slots(
     projects = group_projects(sessions, now=now, decay=decay)
     by_path: Dict[str, Project] = {p.path: p for p in projects}
 
+    # The owned set constrains every step below: a project is only ever placed
+    # on a key FreeMicro drives, so an un-owned key stays empty (and is left out
+    # of ``thstatus`` by the renderer) and no live project vanishes onto a key
+    # we never light. ``owns_all`` is the default, in which every index is owned
+    # and this is exactly the old behaviour.
+    owned = set(config.keys)
+
     assigned: List[str] = [""] * SLOT_COUNT
     pinned: List[bool] = [False] * SLOT_COUNT
 
-    # 1. Pins are absolute, live or not.
+    # 1. Pins are absolute, live or not - but only on a key we own. A pin on an
+    #    un-owned key is ignored (and warned about at load time), never honoured
+    #    onto a key Codex is driving.
     for index, pin in enumerate(config.pins):
-        if pin:
+        if pin and index in owned:
             assigned[index] = pin
             pinned[index] = True
 
@@ -474,6 +576,8 @@ def resolve_slots(
 
         # 2. Incumbents keep their key while they stay live.
         for index, previous_path in enumerate(previous[:SLOT_COUNT]):
+            if index not in owned:
+                continue
             path = normalise_project(previous_path)
             if assigned[index] or not path:
                 continue
@@ -482,10 +586,11 @@ def resolve_slots(
                 taken.add(path)
 
         # 3. Vacancies go to the most recently active project without a key,
-        #    filling from the left so the pad stays readable.
+        #    filling from the left so the pad stays readable - across the owned
+        #    keys only.
         waiting = [p.path for p in projects if p.path not in taken]
         for index in range(SLOT_COUNT):
-            if assigned[index] or not waiting:
+            if index not in owned or assigned[index] or not waiting:
                 continue
             assigned[index] = waiting.pop(0)
 
@@ -495,6 +600,7 @@ def resolve_slots(
             path=assigned[index],
             project=by_path.get(assigned[index]),
             pinned=pinned[index],
+            owned=index in owned,
         )
         for index in range(SLOT_COUNT)
     ]
@@ -543,8 +649,12 @@ class SlotResolver:
             now=now,
             decay=self.decay,
         )
+        # An un-owned key remembers and publishes nothing: it is not ours to
+        # focus, so pressing it does nothing on FreeMicro's side and Codex keeps
+        # it. Owned keys keep the sticky-memory rule (rule 4) as before.
         self._previous = tuple(
-            slot.path or self._previous[slot.index] for slot in slots
+            (slot.path or self._previous[slot.index]) if slot.owned else ""
+            for slot in slots
         )
         return slots
 

@@ -432,6 +432,30 @@ function peekSlots() {
   while (out.length < S.schema.layout.agent_slots) out.push('');
   return out;
 }
+/* Which of the six Agent Keys FreeMicro drives. Absent or empty means all of
+ * them (the default); a strict subset is the "coexist with Codex" split - the
+ * un-ticked keys are left for the ChatGPT app. Mirrors agent_keys.keys in the
+ * config (see freemicro.agentkeys). */
+function peekOwnedKeys() {
+  const total = S.schema.layout.agent_slots;
+  const raw = peekAgents().keys;
+  const valid = [];
+  if (Array.isArray(raw)) {
+    for (const v of raw) {
+      const n = Number(v);
+      if (Number.isInteger(n) && n >= 0 && n < total && !valid.includes(n)) {
+        valid.push(n);
+      }
+    }
+  }
+  if (valid.length) return new Set(valid);
+  const all = new Set();
+  for (let i = 0; i < total; i++) all.add(i);
+  return all;
+}
+function keyReserved(cell) {
+  return cell.slot !== undefined && !peekOwnedKeys().has(cell.slot);
+}
 
 function lighting() {
   if (!S.doc.lighting || typeof S.doc.lighting !== 'object') S.doc.lighting = {};
@@ -759,9 +783,14 @@ function keyNode(cell) {
   if (S.selected === cell.id) classes.push('sel');
   if (!bound) classes.push('unbound');
   if (mismatched(cell)) classes.push('mismatch');
+  // An Agent Key the user left for the ChatGPT app (Codex). FreeMicro never
+  // lights it, so the diagram must not paint it with our state colour - it is
+  // drawn dim and tagged instead.
+  const reserved = keyReserved(cell);
+  if (reserved) classes.push('reserved');
 
   let style = `--span:${cell.span || 1}`;
-  if (cell.lit && peekZones().includes('agent_keys')) {
+  if (cell.lit && !reserved && peekZones().includes('agent_keys')) {
     // Frosted cap lit from underneath: tint the face, glow around it.
     style += `;--face:${rgba(look.hex, 0.12 + 0.5 * look.bright)}`;
     style += `;--glow:${rgba(look.hex, 0.55 * look.bright)}`;
@@ -772,7 +801,9 @@ function keyNode(cell) {
     style += `;--face:${rgba(look.hex, 0.10 + 0.3 * look.bright)}`;
     classes.push('backlit');
   }
-  if (cell.lit) style += `;--dot:${rgba(look.hex, 0.35 + 0.65 * look.bright)}`;
+  if (cell.lit && !reserved) {
+    style += `;--dot:${rgba(look.hex, 0.35 + 0.65 * look.bright)}`;
+  }
 
   const ids = cell.ids && cell.ids.length ? cell.ids : [cell.id];
   const cap = capOf(cell.id);
@@ -780,7 +811,8 @@ function keyNode(cell) {
   // The glyph is the picture on the physical cap; the words are what a screen
   // reader, a tooltip and `keys --list` need. Both, always.
   const spoken = `${cap ? cap.id + ' keycap' : cell.keycap} - ` +
-                 `${ids.join(' and ')} - ${capLabel(cell)}`;
+                 `${ids.join(' and ')} - ${capLabel(cell)}` +
+                 (reserved ? ' - left for the ChatGPT app (Codex)' : '');
   return el('button', {
     class: classes.join(' '),
     type: 'button',
@@ -799,6 +831,10 @@ function keyNode(cell) {
     el('span', { class: 'key-id', text: ids.join('+') }),
     cell.slot !== undefined && el('span', {
       class: 'slot-tag', text: `slot ${cell.slot + 1}`,
+    }),
+    reserved && el('span', {
+      class: 'slot-tag reserved-tag', text: 'Codex',
+      title: 'Left for the ChatGPT app - FreeMicro does not drive this key',
     }),
     mismatched(cell) && el('span', { class: 'key-warn', text: '!',
                                      title: 'The two halves disagree' }));
@@ -2301,6 +2337,15 @@ function renderAdvanced() {
       'Both programs drive the same LEDs. With this on, FreeMicro only lights ' +
       'under the keycaps and leaves the six Agent Keys to the vendor app.'),
 
+    el('h3', { text: 'Split the Agent Keys with Codex' }),
+    ownedKeysControl(),
+    el('p', { class: 'hint' },
+      'Run Codex too? Instead of giving up all six keys, keep some and give ' +
+      'Codex the rest. Untick the keys the ChatGPT app should own: FreeMicro ' +
+      'drives only the ticked keys and never writes the others, so Codex keeps ' +
+      'its colours there. It re-sends its keys every few seconds to hold them. ' +
+      'All ticked (the default) drives every key.'),
+
     el('h3', { text: 'When FreeMicro stops' }),
     picker({
       value: l.on_exit || 'off',
@@ -2328,6 +2373,47 @@ function renderAdvanced() {
     // list, so it must be spread - passing it whole renders the literal text
     // "[object HTMLHeadingElement],[object HTMLParagraphElement],…".
     ...dictationSection());
+}
+
+/* The "coexist with Codex" control: six little toggles, one per Agent Key.
+ * Ticked keys are the ones FreeMicro drives; unticked keys are left for the
+ * ChatGPT app. All ticked (the default) writes no `keys` at all - it means
+ * "drive everything" and keeps the config in its historic shape. */
+function ownedKeysControl() {
+  const owned = peekOwnedKeys();
+  const total = S.schema.layout.agent_slots;
+  const bits = [];
+  for (let i = 0; i < total; i++) {
+    const on = owned.has(i);
+    bits.push(el('button', {
+      class: 'keybit' + (on ? ' on' : ''),
+      type: 'button',
+      'aria-pressed': on ? 'true' : 'false',
+      title: on
+        ? `AG${i + 1}: FreeMicro drives this key. Click to leave it for Codex.`
+        : `AG${i + 1}: left for the ChatGPT app (Codex). Click to drive it.`,
+      onclick: () => toggleOwnedKey(i),
+    }, 'AG' + (i + 1)));
+  }
+  return el('div', { class: 'keybits' }, bits);
+}
+
+function toggleOwnedKey(index) {
+  const owned = peekOwnedKeys();
+  if (owned.has(index)) owned.delete(index); else owned.add(index);
+  const total = S.schema.layout.agent_slots;
+  const list = [];
+  for (let i = 0; i < total; i++) if (owned.has(i)) list.push(i);
+  // Refuse to leave FreeMicro with no keys: an empty set would read as "drive
+  // nothing" but actually means "drive everything", which is a trap. Keep at
+  // least one owned key - untick down to one and that is the floor.
+  if (!list.length) return;
+  const a = agents();
+  // All six is the default; write no `keys` so the config keeps its old shape.
+  if (list.length === total) delete a.keys; else a.keys = list;
+  changed();
+  renderPad();
+  renderAdvanced();
 }
 
 function agentSlots() {

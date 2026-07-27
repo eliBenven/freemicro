@@ -565,6 +565,38 @@ main {
   color: color-mix(in srgb, currentColor 55%, transparent);
 }
 
+/* An Agent Key left for the ChatGPT app (Codex): FreeMicro never lights it, so
+ * it is drawn dim, without our state glow, and tagged so the split is legible
+ * at a glance. It is still clickable to edit its binding. */
+.key.agent.reserved {
+  opacity: .5;
+  box-shadow: 0 2px 0 var(--cap-edge), var(--shadow-1);
+}
+.key.agent.reserved::after { display: none; }
+.slot-tag.reserved-tag {
+  top: auto; bottom: 7px; right: 7px; left: auto;
+  padding: 1px 5px; border-radius: 5px;
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  color: color-mix(in srgb, currentColor 72%, transparent);
+  font-weight: 650;
+}
+
+/* The "keys FreeMicro drives" toggles in Settings - one per Agent Key. */
+.keybits { display: flex; flex-wrap: wrap; gap: 6px; }
+.keybit {
+  font: 11px/1 var(--mono); letter-spacing: .03em;
+  padding: 6px 9px; border-radius: 7px; cursor: pointer;
+  background: var(--surface-2, transparent);
+  border: 1px solid var(--cap-edge); color: var(--ink-2);
+  transition: border-color .12s, background .12s, color .12s;
+}
+.keybit:hover { border-color: var(--accent); }
+.keybit.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--ink);
+}
+
 /* the firmware-owned haptic control: drawn, explained, never bindable */
 .key.control {
   background-image: var(--chassis);
