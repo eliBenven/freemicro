@@ -4,6 +4,18 @@ All notable changes to FreeMicro are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-07-27
+
+### Fixed
+- **Coexistence split now covers key presses, not just lighting.** With
+  `agent_keys.keys` set to a subset, pressing a key FreeMicro did not own (a
+  Codex key) still ran its binding and could open a new terminal on top of
+  Codex. Un-owned Agent Keys are now inert on FreeMicro's side entirely, so the
+  three-and-three split with Codex behaves on press too. (Note: the pad's key
+  presses are read by both apps at once, so this stops FreeMicro acting on
+  Codex's keys; it cannot stop Codex reacting to FreeMicro's keys - that needs a
+  setting on the Codex side.)
+
 ## [0.4.0] - 2026-07-27
 
 ### Added
@@ -372,6 +384,7 @@ The layers that predate the hardware work, and are still the backbone:
 - **There is no preset trust check yet.** A config you did not write is a
   program you did not read - see `docs/SECURITY-MODEL.md`.
 
+[0.4.1]: https://github.com/eliBenven/freemicro/releases/tag/v0.4.1
 [0.4.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.4.0
 [0.3.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.3.0
 [0.2.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.2.0
