@@ -65,7 +65,17 @@ import os
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from freemicro.state.engine import (
     DEFAULT_DECAY,
@@ -573,12 +583,21 @@ def resolve_slots(
     previous: Sequence[str] = (),
     now: Optional[float] = None,
     decay: DecayPolicy = DEFAULT_DECAY,
+    owned: Optional[Sequence[int]] = None,
 ) -> List[AgentSlot]:
     """Assign the six Agent Keys. Pure - see the module docstring for the rule.
 
     ``previous`` is the path each slot held last time, which is what makes the
     assignment sticky; pass ``()`` for a cold start. The caller owns that memory
     (:class:`SlotResolver` does it for you) so this function stays a function.
+
+    ``owned`` overrides which keys FreeMicro drives for this one call. It exists
+    for the coexistence feature: the configured subset (``config.keys``) is only
+    honoured *while the ChatGPT app is running*; when it is not there is no one to
+    share with, so FreeMicro owns all six. That "effective" set is resolved at
+    runtime by :class:`AgentKeyOwnership` and threaded in here, leaving the config
+    immutable. ``None`` (the default) means "use ``config.keys``", so every caller
+    that does not coexist is byte-identical to before.
 
     ``POLICY_MIRROR`` is resolved exactly like ``recent`` - the renderer is what
     decides to ignore slots and paint all six keys one colour, and ``freemicro
@@ -593,8 +612,9 @@ def resolve_slots(
     # on a key FreeMicro drives, so an un-owned key stays empty (and is left out
     # of ``thstatus`` by the renderer) and no live project vanishes onto a key
     # we never light. ``owns_all`` is the default, in which every index is owned
-    # and this is exactly the old behaviour.
-    owned = set(config.keys)
+    # and this is exactly the old behaviour. ``owned`` is the effective set for
+    # this call (all six when Codex is absent); ``config.keys`` when unset.
+    owned = set(config.keys if owned is None else owned)
 
     assigned: List[str] = [""] * SLOT_COUNT
     pinned: List[bool] = [False] * SLOT_COUNT
@@ -677,6 +697,7 @@ class SlotResolver:
         sessions: Sequence[SessionState],
         *,
         now: Optional[float] = None,
+        owned: Optional[Sequence[int]] = None,
     ) -> List[AgentSlot]:
         slots = resolve_slots(
             self.config,
@@ -684,6 +705,7 @@ class SlotResolver:
             previous=self._previous,
             now=now,
             decay=self.decay,
+            owned=owned,
         )
         # An un-owned key remembers and publishes nothing: it is not ours to
         # focus, so pressing it does nothing on FreeMicro's side and Codex keeps
@@ -714,10 +736,159 @@ def slot_for_project(slots: Sequence[AgentSlot], path: str) -> Optional[AgentSlo
     return None
 
 
+# ---------------------------------------------------------------------------
+# Effective ownership: the subset only holds while Codex is actually here
+# ---------------------------------------------------------------------------
+
+#: How often :class:`AgentKeyOwnership` may re-check whether the ChatGPT app is
+#: running, in seconds. The check is a ``pgrep`` (see
+#: :func:`freemicro.permissions.chatgpt_running`) - a fork - so it must never run
+#: on the render tick (~4 Hz) or the key path, both of which only ever read the
+#: cached answer. **3 seconds**: soon enough that the pad expands to all six
+#: within a few seconds of Codex quitting (and contracts within a few of it
+#: launching), rare enough to cost nothing, and the same cadence the lighting
+#: owner already probes the vendor app on (:attr:`ReassertConfig.poll_seconds`).
+#: Only ever paid while a strict subset is configured; the all-six default never
+#: probes at all.
+DEFAULT_CODEX_POLL_SECONDS = 3.0
+
+
+def _default_codex_probe() -> bool:
+    """Whether the ChatGPT desktop app is running. Forks; lazy import.
+
+    Isolated behind a function so :class:`AgentKeyOwnership` can be driven from a
+    test with a fake provider and never shell out. See
+    :func:`freemicro.permissions.chatgpt_running`.
+    """
+    from freemicro import permissions
+
+    return permissions.chatgpt_running()
+
+
+@dataclass
+class AgentKeyOwnership:
+    """Which Agent Keys FreeMicro drives *right now*, resolved against Codex.
+
+    ``agent_keys.keys`` names a static subset of the six Agent Keys to coexist
+    with the ChatGPT desktop app (Codex): FreeMicro lights and acts on its keys
+    and leaves the rest for Codex. But that split only makes sense while Codex is
+    actually there to share with. **When the ChatGPT app is not running there is
+    no one to leave keys for, so FreeMicro owns all six** - it lights all six and
+    acts on all six - even though a subset is configured. When the app is
+    running, the configured subset is honoured. It is dynamic: if Codex quits
+    FreeMicro expands to all six within a few seconds; if Codex launches it
+    contracts to its subset and hands the rest back.
+
+    This is the one place that resolves that, so the renderer (lighting) and the
+    bridge (press gating) consult a single effective owned set and can never
+    disagree about which keys are FreeMicro's. It caches an "is Codex here" flag
+    and re-probes only on a slow cadence (:data:`DEFAULT_CODEX_POLL_SECONDS`) via
+    :meth:`refresh` - never on the render tick or the key path, which only read
+    the cache.
+
+    The config stays immutable: the dynamic part is state, and it lives here.
+    With the all-six default (:attr:`AgentKeysConfig.owns_all`) nothing changes,
+    the probe is never called, and every read is byte-identical to the config's
+    own static answer.
+
+    Both the probe and the clock are injectable, so a test drives the whole thing
+    from data with no real ``pgrep`` - the same discipline as
+    :class:`freemicro.input.frontmost.FrontmostWatcher` and
+    :class:`freemicro.lighting_owner.LightingOwner`.
+    """
+
+    config: AgentKeysConfig
+    #: The "is the ChatGPT app running?" provider. ``None`` resolves lazily to
+    #: :func:`_default_codex_probe` (the real ``pgrep``); a test passes its own.
+    probe: Optional[Callable[[], bool]] = None
+    #: Monotonic by default: the cadence is a duration, and an NTP step must not
+    #: be able to freeze the re-probe.
+    clock: Callable[[], float] = time.monotonic
+    poll_seconds: float = DEFAULT_CODEX_POLL_SECONDS
+    #: Assumed present until the first probe proves otherwise, so a subset config
+    #: honours its split from the very first read (before any poll) rather than
+    #: briefly grabbing keys it was told to share. The run loop's first tick
+    #: re-probes within a tick and corrects this if Codex is in fact absent.
+    _codex_here: bool = field(default=True, init=False)
+    _checked_at: Optional[float] = field(default=None, init=False)
+
+    @property
+    def codex_here(self) -> bool:
+        """The cached verdict: is the ChatGPT app running? Never probes."""
+        return self._codex_here
+
+    @property
+    def coexisting(self) -> bool:
+        """True when we are actually sharing: a subset configured AND Codex here."""
+        return self.config.subset and self._codex_here
+
+    @property
+    def keys(self) -> Tuple[int, ...]:
+        """The Agent Key indices FreeMicro effectively drives right now.
+
+        The configured subset while Codex is here; all six when it is not (or
+        when all six are configured anyway). A pure read of the cached flag.
+        """
+        if self.config.owns_all or not self._codex_here:
+            return tuple(range(SLOT_COUNT))
+        return self.config.keys
+
+    def owns(self, index: int) -> bool:
+        """Whether FreeMicro drives the Agent Key at ``index`` right now."""
+        return index in self.keys
+
+    def leaves_to_codex(self, input_id: Any) -> bool:
+        """Whether ``input_id`` is an Agent Key we currently leave to Codex.
+
+        ``False`` for every input when we own all six - the default, and also
+        whenever Codex is not running - so the key path is byte-identical to the
+        pre-split behaviour unless a subset is configured *and* the ChatGPT app
+        is actually up. Pure: reads the cached flag, never probes.
+        """
+        if self.config.owns_all or not self._codex_here:
+            return False
+        index = agent_key_index(input_id)
+        return index is not None and index not in self.config.keys
+
+    def refresh(self, now: Optional[float] = None) -> bool:
+        """Re-probe whether Codex is here, at most once per :attr:`poll_seconds`.
+
+        Returns whether the effective owned set *changed*, so the caller can
+        invalidate the renderer's dedupe cache and repaint the keys that just
+        changed hands. Does no work and never probes when all six are owned - the
+        split is off, so there is nothing to resolve. **This is the only method
+        that forks**; call it from the run loop's tick, never from the key path.
+        """
+        if self.config.owns_all:
+            return False
+        now = self.clock() if now is None else now
+        if self._checked_at is not None and now - self._checked_at < self.poll_seconds:
+            return False
+        self._checked_at = now
+        was = self._codex_here
+        probe = self.probe if self.probe is not None else _default_codex_probe
+        self._codex_here = bool(probe())
+        return self._codex_here != was
+
+    def set_config(self, config: AgentKeysConfig) -> None:
+        """Adopt a reloaded config, and re-probe promptly on the next refresh.
+
+        The config is immutable, but a *reload* can swap all-six for a subset or
+        the reverse, so the cached verdict has to be re-resolved. Reset to the
+        assume-present default and force the next :meth:`refresh` to probe, so a
+        newly-configured subset resolves against reality within a tick.
+        """
+        self.config = config
+        self._codex_here = True
+        self._checked_at = None
+
+
 __all__ = [
+    "AgentKeyOwnership",
     "AgentKeysConfig",
     "AgentKeysError",
     "AgentSlot",
+    "DEFAULT_CODEX_POLL_SECONDS",
     "POLICIES",
     "POLICY_MANUAL",
     "POLICY_MIRROR",

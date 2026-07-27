@@ -260,6 +260,74 @@ def test_owned_keys_property_reflects_the_config():
     assert MicroLedsRenderer(config=CONFIG).owned_keys == (0, 1, 2, 3, 4, 5)
 
 
+def _codex_ownership(config, running):
+    from freemicro.agentkeys import AgentKeyOwnership
+
+    return AgentKeyOwnership(
+        config.agent_keys, probe=lambda: running["value"], poll_seconds=0.0
+    )
+
+
+def test_a_subset_lights_all_six_when_codex_is_absent():
+    """No ChatGPT app: FreeMicro owns all six even though a subset is set."""
+    config = _subset_config([3, 4, 5])
+    running = {"value": False}
+    ownership = _codex_ownership(config, running)
+    ownership.refresh()                        # Codex is not running
+    device = FakeDevice()
+    renderer = MicroLedsRenderer(
+        device=device, config=config, store=_SessionStore([_working("/code/api")]),
+        ownership=ownership,
+    )
+    assert renderer.owned_keys == (0, 1, 2, 3, 4, 5)
+    renderer.render(AgentState.WORKING)
+    thstatus = device.sent[0]
+    # All six addressed, and the one project lands on the lowest key (AG00).
+    assert [e["id"] for e in thstatus["p"]] == [0, 1, 2, 3, 4, 5]
+    assert thstatus["p"][0]["c"] == 0x0000FF
+
+
+def test_a_subset_lights_only_owned_keys_when_codex_is_running():
+    config = _subset_config([3, 4, 5])
+    running = {"value": True}
+    ownership = _codex_ownership(config, running)
+    ownership.refresh()
+    device = FakeDevice()
+    renderer = MicroLedsRenderer(
+        device=device, config=config, store=_SessionStore([_working("/code/api")]),
+        ownership=ownership,
+    )
+    assert renderer.owned_keys == (3, 4, 5)
+    renderer.render(AgentState.WORKING)
+    assert [e["id"] for e in device.sent[0]["p"]] == [3, 4, 5]
+
+
+def test_expanding_to_all_six_repaints_after_an_invalidate():
+    """Codex quits mid-run: the newly-owned keys must be painted.
+
+    The run loop invalidates the dedupe when the effective set changes; without
+    that, an empty owned key and an empty un-owned key look identical to the
+    frame cache, so the take-over would not resend.
+    """
+    config = _subset_config([3, 4, 5])
+    running = {"value": True}
+    ownership = _codex_ownership(config, running)
+    ownership.refresh()
+    device = FakeDevice()
+    renderer = MicroLedsRenderer(
+        device=device, config=config, store=_SessionStore([_working("/code/api")]),
+        ownership=ownership,
+    )
+    renderer.render(AgentState.WORKING)
+    assert [e["id"] for e in device.sent[-1]["p"]] == [3, 4, 5]
+
+    running["value"] = False
+    assert ownership.refresh() is True          # what the run loop watches
+    renderer.invalidate()                       # ...and acts on
+    renderer.render(AgentState.WORKING)
+    assert [e["id"] for e in device.sent[-1]["p"]] == [0, 1, 2, 3, 4, 5]
+
+
 def test_the_default_all_six_config_still_addresses_every_key():
     """Zero behaviour change when no subset is set - byte-identical ids."""
     config = _subset_config([0, 1, 2, 3, 4, 5])

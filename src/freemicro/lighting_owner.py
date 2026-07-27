@@ -774,9 +774,22 @@ class LightingOwner:
         return LightingEvent(REASON_CONFIG, "reasserted lighting (config changed)")
 
     def _coexist_subset(self) -> bool:
-        """True when a strict Agent-Key subset is configured (coexisting)."""
+        """True when we are *actually* coexisting: subset configured AND Codex here.
+
+        The auto-heartbeat exists to hold the split against the ChatGPT app - so
+        it should only run while there is something to hold it against. When Codex
+        is not running FreeMicro owns all six keys (see
+        :class:`freemicro.agentkeys.AgentKeyOwnership`) and there is nothing to
+        fight, so we do not reassert. ``_vendor_running`` is the cached verdict of
+        the same rate-limited vendor probe :meth:`_check_vendor` already runs; it
+        is ``None`` until the first probe, which reads as "not coexisting yet".
+        """
         config = self._config
-        return config is not None and config.agent_keys.subset
+        return (
+            config is not None
+            and config.agent_keys.subset
+            and bool(self._vendor_running)
+        )
 
     def _heartbeat_seconds(self) -> float:
         """The effective reassert cadence, 0 when off.

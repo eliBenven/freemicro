@@ -419,8 +419,19 @@ class Bridge:
         on_dispatch: Optional[Callable[[Dispatch], None]] = None,
         on_activity: Optional[Callable[[str, Optional[Any]], None]] = None,
         max_hold_seconds: Optional[float] = None,
+        ownership: Optional[Any] = None,
     ) -> None:
         self.backend = backend
+        #: The effective Agent-Key ownership - which keys are FreeMicro's *right
+        #: now* - shared with the LED renderer so presses and lighting never
+        #: disagree about the coexistence split. A
+        #: :class:`freemicro.agentkeys.AgentKeyOwnership`, injected by ``freemicro
+        #: run``. ``None`` for a standalone bridge (a test, ``keys --dry-run``),
+        #: which falls back to the config's own static ``agent_keys.keys``, so the
+        #: key path is unchanged unless something wires the dynamic owner in. Only
+        #: ever *read* here - the slow ``pgrep`` behind it runs on the run loop's
+        #: tick, never on a key press.
+        self._ownership = ownership
         self.clock = clock or _monotonic
         #: The physical-hold backstop. See :data:`DEFAULT_MAX_HOLD_SECONDS`.
         self.max_hold_seconds = (
@@ -1394,9 +1405,18 @@ class Bridge:
         un-owned Agent Key is Codex's entirely, so a press of one dispatches
         nothing here - no focus, no new terminal, no bound action, whatever the
         user may have bound to it - and its release is a clean no-op to match.
-        Always ``False`` under the default (all six owned), so the key path is
-        byte-identical unless a strict subset is configured.
+
+        The split only holds *while the ChatGPT app is running* to share with:
+        when it is not, FreeMicro owns all six and this is ``False`` for every
+        key, so an un-owned key comes back to life the moment Codex quits. That
+        dynamic answer comes from the shared :attr:`_ownership`; without one
+        injected (a standalone bridge) we fall back to the config's own static
+        ``agent_keys.keys``. Always ``False`` under the all-six default either
+        way, so the key path is byte-identical unless a subset is configured.
         """
+        ownership = self._ownership
+        if ownership is not None:
+            return ownership.leaves_to_codex(input_id)
         return self._config.agent_keys.leaves_to_codex(input_id)
 
     def press(self, input_id: str) -> List[Dispatch]:

@@ -971,6 +971,20 @@ keys only. A `thstatus` that names fewer than six keys updates just those keys
 and leaves the others as they are, which is what lets the ChatGPT app's colours
 on the un-owned keys persist.
 
+**The split only holds while the ChatGPT app is actually running.** It exists to
+share the six keys with Codex - so when the ChatGPT app is not running there is
+no one to share with, and FreeMicro drives **all six** even though a subset is
+configured. This is dynamic and needs no restart: quit the ChatGPT app and within
+a few seconds FreeMicro expands to all six (lighting `AG00`-`AG02` for your own
+projects and acting on their presses again); launch it and FreeMicro contracts
+back to `AG03`-`AG05` and hands the rest to Codex. FreeMicro checks whether the
+ChatGPT app is running on a slow poll (a few seconds, never on the key path), so
+the cost is nothing and a press never waits on it. Under the default all-six
+config nothing is polled at all. `freemicro keys --list` says whether the split
+is active right now. One honest caveat: a key FreeMicro lit and then released
+when the app launches keeps FreeMicro's last colour until Codex next repaints it -
+FreeMicro simply stops writing that key, it cannot un-light it.
+
 **The split covers presses as well as lighting.** An un-owned Agent Key is
 Codex's *entirely*: FreeMicro ignores its presses. Pressing `AG00` while you own
 `[3, 4, 5]` does nothing on FreeMicro's side - no focus, no new terminal window,
@@ -1002,14 +1016,16 @@ Rules and defaults:
   Codex's keys are never blanked by FreeMicro either.
 * **Holding the split.** The ChatGPT app writes all six keys on its own model
   changes and would periodically clobber the keys you own. So while a subset is
-  configured, FreeMicro turns on a modest reassert cadence by itself (every ~3 s)
-  and re-sends its owned keys - just those keys, never the ones Codex has. Without
-  this the pad would show your keys flicker to Codex's colour and stay there. The
-  cadence is only on while a subset is set; with the default all-six config there
-  is no heartbeat and no added traffic. The trade-off is the general heartbeat
-  one - each re-send restarts an animated effect - but the owned-key states are
-  `solid`, so a re-send is invisible; set `reassert.heartbeat_seconds` yourself to
-  override the cadence.
+  configured **and the ChatGPT app is actually running**, FreeMicro turns on a
+  modest reassert cadence by itself (every ~3 s) and re-sends its owned keys -
+  just those keys, never the ones Codex has. Without this the pad would show your
+  keys flicker to Codex's colour and stay there. The cadence is only on while you
+  are *actually coexisting*: with the default all-six config, or whenever the
+  ChatGPT app is not running (FreeMicro then owns all six and there is nothing to
+  fight), there is no heartbeat and no added traffic. The trade-off is the general
+  heartbeat one - each re-send restarts an animated effect - but the owned-key
+  states are `solid`, so a re-send is invisible; set `reassert.heartbeat_seconds`
+  yourself to override the cadence.
 
 `freemicro keys --list` prints which keys FreeMicro drives and which are left for
 Codex.

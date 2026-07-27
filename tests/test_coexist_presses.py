@@ -13,6 +13,7 @@ resolves to an empty slot - which is the case that must still open a terminal.
 
 from __future__ import annotations
 
+from freemicro.agentkeys import AgentKeyOwnership
 from freemicro.input.actions import RecordingBackend
 from freemicro.input.bridge import Bridge
 from freemicro.padconfig import parse
@@ -22,10 +23,23 @@ def key_event(key, act=1):
     return {"m": "v.oai.hid", "p": {"k": key, "act": act}}
 
 
-def _bridge(config_dict):
+def _bridge(config_dict, ownership=None):
     pad = parse(config_dict)
     backend = RecordingBackend()
-    return Bridge(pad, backend, autostart=False), backend
+    return Bridge(pad, backend, autostart=False, ownership=ownership), backend
+
+
+def _dynamic_bridge(config_dict, running):
+    """A bridge whose split is driven by a live 'is Codex here' flag."""
+    pad = parse(config_dict)
+    # poll_seconds=0 so each refresh() re-probes; the cadence itself is covered
+    # in test_agentkeys.py.
+    ownership = AgentKeyOwnership(
+        pad.agent_keys, probe=lambda: running["value"], poll_seconds=0.0
+    )
+    backend = RecordingBackend()
+    bridge = Bridge(pad, backend, autostart=False, ownership=ownership)
+    return bridge, backend, ownership
 
 
 def _terminal_opened(backend) -> bool:
@@ -153,5 +167,62 @@ def test_a_profile_override_on_an_un_owned_key_never_fires():
         "agent_keys": {"policy": "recent", "keys": [3, 4, 5]},
     })
     bridge.set_frontmost("Terminal")
+    assert bridge.press("AG00") == []
+    assert backend.calls == []
+
+
+# ---------------------------------------------------------------------------
+# The split is conditional on the ChatGPT app running (dynamic ownership)
+# ---------------------------------------------------------------------------
+
+_SUBSET = {
+    "version": 1,
+    "bindings": {"AG00": {"action": "key", "key": "escape"}},
+    "agent_keys": {"policy": "recent", "keys": [3, 4, 5]},
+}
+
+
+def test_the_split_gates_presses_only_while_codex_is_running():
+    running = {"value": True}
+    bridge, backend, ownership = _dynamic_bridge(_SUBSET, running)
+    ownership.refresh()                         # Codex here: AG00 is Codex's
+    assert bridge.press("AG00") == []
+    assert bridge.release("AG00") == []
+    assert backend.calls == []
+
+
+def test_an_un_owned_key_comes_back_to_life_when_codex_quits():
+    running = {"value": True}
+    bridge, backend, ownership = _dynamic_bridge(_SUBSET, running)
+    ownership.refresh()
+    assert bridge.press("AG00") == []          # inert while Codex is here
+
+    running["value"] = False
+    assert ownership.refresh() is True          # Codex quit -> we own all six
+    dispatches = bridge.press("AG00")
+    assert [d.input_id for d in dispatches] == ["AG00"]
+    bridge.release("AG00")
+    assert ("press_key", ("escape",)) in backend.calls
+
+
+def test_an_owned_key_acts_the_same_whether_or_not_codex_is_running():
+    for codex in (True, False):
+        running = {"value": codex}
+        pad = {
+            "version": 1,
+            "bindings": {"AG03": {"action": "key", "key": "enter"}},
+            "agent_keys": {"policy": "recent", "keys": [3, 4, 5]},
+        }
+        bridge, backend, ownership = _dynamic_bridge(pad, running)
+        ownership.refresh()
+        assert [d.input_id for d in bridge.press("AG03")] == ["AG03"]
+        bridge.release("AG03")
+        assert ("press_key", ("enter",)) in backend.calls
+
+
+def test_a_bridge_without_an_owner_falls_back_to_the_static_subset():
+    # No ownership injected (a standalone bridge / the pre-dynamic path): the
+    # configured subset applies exactly as it always did.
+    bridge, backend = _bridge(_SUBSET)
     assert bridge.press("AG00") == []
     assert backend.calls == []

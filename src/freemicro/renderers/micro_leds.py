@@ -134,7 +134,7 @@ import time
 import weakref
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple
 
-from freemicro.agentkeys import AgentSlot, SlotResolver
+from freemicro.agentkeys import AgentKeyOwnership, AgentSlot, SlotResolver
 from freemicro.device import Device, close_shared, shared_device
 from freemicro.device.lighting import (
     ZONE_AGENT_KEYS,
@@ -383,12 +383,23 @@ class MicroLedsRenderer(Renderer):
         clock: Callable[[], float] = time.monotonic,
         notify: Optional[Callable[[str], None]] = None,
         battery_reader: Optional[Callable[[], Optional[dict]]] = None,
+        ownership: Optional[AgentKeyOwnership] = None,
     ) -> None:
         # A caller-supplied device is borrowed; otherwise we use (and release)
         # the process-wide shared handle. Either way we never open a second one.
         self._device = device
         self._borrowed = device is not None
         self._config = config
+        #: The effective Agent-Key ownership - which of the six keys FreeMicro
+        #: drives *right now*, the configured subset only while Codex is running.
+        #: Injected by ``freemicro run`` so the LEDs and the key bridge share one
+        #: (they must never disagree about which keys are ours); ``None`` for a
+        #: standalone renderer (the preview path, the registry), where it is built
+        #: lazily from the config and simply honours the configured subset - it is
+        #: never refreshed, so it stays the config's static answer, exactly the
+        #: pre-dynamic behaviour. See :meth:`owned_keys` and :class:`AgentKeyOwnership`.
+        self._ownership = ownership
+        self._ownership_injected = ownership is not None
         # ``store`` is a StateStore; left untyped so this module does not have
         # to import it for a construction it may never do.
         self._store = store
@@ -454,18 +465,33 @@ class MicroLedsRenderer(Renderer):
         return self.config.lighting
 
     @property
+    def key_ownership(self) -> AgentKeyOwnership:
+        """The effective Agent-Key ownership this renderer paints from.
+
+        The shared one injected by ``freemicro run`` (so the LEDs and the key
+        bridge agree), or one built here from the config for a standalone
+        renderer. Built lazily so constructing a renderer never probes.
+        """
+        if self._ownership is None:
+            self._ownership = AgentKeyOwnership(self.config.agent_keys)
+        return self._ownership
+
+    @property
     def owned_keys(self) -> Tuple[int, ...]:
-        """The Agent Key indices FreeMicro drives, in ``AG00``-``AG05`` order.
+        """The Agent Key indices FreeMicro drives *right now*, in key order.
 
         All six unless ``agent_keys.keys`` names a strict subset to coexist with
-        the ChatGPT desktop app (Codex). Every ``thstatus`` this renderer builds
-        - per-slot state, the mirrored look, an overlay or battery layer that
-        seizes the whole zone, and the blank/exit frame - is restricted to these
-        keys, so the keys we do not own are never in a message we send and the
-        vendor app's writes to them persist. With the default all-six set this
-        is ``(0, 1, 2, 3, 4, 5)`` and every builder is byte-identical to before.
+        the ChatGPT desktop app (Codex) *and* that app is actually running - when
+        it is not, there is no one to share with, so FreeMicro owns all six even
+        though a subset is configured (see :class:`AgentKeyOwnership`). Every
+        ``thstatus`` this renderer builds - per-slot state, the mirrored look, an
+        overlay or battery layer that seizes the whole zone, and the blank/exit
+        frame - is restricted to these keys, so the keys we do not own are never
+        in a message we send and the vendor app's writes to them persist. With
+        the default all-six set this is ``(0, 1, 2, 3, 4, 5)`` and every builder
+        is byte-identical to before.
         """
-        return self.config.agent_keys.keys
+        return self.key_ownership.keys
 
     def apply_config(self, config: PadConfig) -> None:
         """Swap in a freshly loaded config while we are running.
@@ -481,6 +507,12 @@ class MicroLedsRenderer(Renderer):
         previous = self._config.lighting if self._config is not None else None
         self._config = config
         self._resolver = None
+        # A self-built ownership caches the *old* config's agent_keys, so rebuild
+        # it from the new one lazily. An injected (shared) ownership is the run
+        # loop's to update - it calls set_config on the one object the bridge
+        # shares - so we must not swap it out from under the bridge here.
+        if not self._ownership_injected:
+            self._ownership = None
         self._published = ()
         self._frame = None
         self._model = None
@@ -556,7 +588,11 @@ class MicroLedsRenderer(Renderer):
         try:
             if sessions is None:
                 sessions = store.sessions()
-            resolved = self._resolver.resolve(sessions)
+            # The effective owned set, not the static ``config.keys``: when Codex
+            # is not running the subset gives way to all six, so the keys it
+            # names are re-driven (their projects / dark-if-empty). ``owned``
+            # threads that into the pure resolver, keeping the config immutable.
+            resolved = self._resolver.resolve(sessions, owned=self.owned_keys)
         except Exception:  # noqa: BLE001 - an unreadable store must not go dark
             return None
         self._publish(self._resolver.previous)

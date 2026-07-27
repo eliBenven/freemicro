@@ -1262,11 +1262,22 @@ def _print_keymap(pad) -> None:
         ak = pad.agent_keys
         owned = ", ".join(f"AG{i:02d}" for i in ak.keys)
         others = ", ".join(f"AG{i:02d}" for i in range(6) if i not in ak.keys)
+        # The split only holds while the ChatGPT app is running to share with;
+        # when it is not, FreeMicro owns all six. Probe once (this is a one-shot
+        # command, so a single pgrep is fine) to say which is true right now.
+        codex_here = _chatgpt_running()
         print(f"\n  Coexisting with Codex (agent_keys.keys): FreeMicro owns "
-              f"{owned}. It\n  leaves {others} to the vendor app (Codex) "
-              "entirely - it ignores their\n  presses (no focus, no new "
-              "terminal, no bound action) and never lights them,\n  so a binding "
-              "on one never fires.")
+              f"{owned} and\n  leaves {others} to the vendor app (Codex) - it "
+              "ignores their presses (no\n  focus, no new terminal, no bound "
+              "action) and never lights them, so a\n  binding on one never "
+              "fires. But only while the ChatGPT app is running: when\n  it is "
+              "not, there is no one to share with, so FreeMicro owns all six.")
+        if codex_here:
+            print("  The ChatGPT app is running now, so the split is active: "
+                  f"{others} are Codex's.")
+        else:
+            print("  The ChatGPT app is not running now, so FreeMicro owns all "
+                  "six keys - the\n  split activates when you launch it.")
 
     # Chords live in their own mapping, keyed by the sorted members, so a
     # listing that walks `bindings` alone shows nothing for a chord the user
@@ -1360,9 +1371,11 @@ def _print_keymap(pad) -> None:
         if ak.subset:
             owned = ", ".join(f"AG{i:02d}" for i in ak.keys)
             others = ", ".join(f"AG{i:02d}" for i in range(6) if i not in ak.keys)
-            print(f"  Agent Keys driven: {owned}")
-            print(f"  {others} left for the vendor app (Codex) - FreeMicro "
-                  "never writes them, so its lighting stays put.")
+            print(f"  Agent Keys driven: {owned} while the ChatGPT app is running")
+            print(f"  {others} left for the vendor app (Codex) then - FreeMicro "
+                  "never writes them,\n  so its lighting stays put. When the "
+                  "ChatGPT app is not running FreeMicro\n  drives all six (there "
+                  "is no one to share with).")
         else:
             print("  Agent Keys driven: all six")
     # Auto-dim is invisible until something is printed about it, and a pad that
@@ -2302,6 +2315,7 @@ def _run_pipeline(
     them pays nothing for the feature.
     """
     from freemicro import staleness
+    from freemicro.agentkeys import AgentKeyOwnership
     from freemicro.alerts import Alerter
     from freemicro.device import close_shared, run_with_reconnect
     from freemicro.input.actions import RecordingBackend, best_backend
@@ -2331,6 +2345,14 @@ def _run_pipeline(
     # Defends our colours against the other app writing them, and reloads the
     # config in place when it changes. Costs one clock read per key event.
     owner = LightingOwner(config=pad)
+    # Which of the six Agent Keys are FreeMicro's *right now*. A configured
+    # subset (coexisting with Codex) only holds while the ChatGPT app is running;
+    # when it is not, FreeMicro owns all six. One object, shared by the key bridge
+    # (press gating) and the LED renderer (lighting), so the two can never
+    # disagree about which keys are ours. It re-probes on a slow cadence off the
+    # tick below - never on the key path - and does nothing at all under the
+    # all-six default. See freemicro.agentkeys.AgentKeyOwnership.
+    ownership = AgentKeyOwnership(pad.agent_keys)
     # What a live binding is asking the pad to show. Held here rather than in
     # the bridge or the renderer because it is neither's business: the bridge
     # knows when a key is down and nothing about colour, the renderer paints and
@@ -2350,7 +2372,7 @@ def _run_pipeline(
     # arrive. A readout that lags the key it is describing is worse than
     # none while somebody is tuning chords.
     bridge = Bridge(pad, backend, on_dispatch=_print_dispatch,
-                    on_activity=overlay.note)
+                    on_activity=overlay.note, ownership=ownership)
     # The frontmost-app cache that per-app profiles resolve against. Built even
     # when the current config has no profiles - it does no OS work until polled,
     # and the tick only polls it when profiles are present - so a reload that
@@ -2370,7 +2392,7 @@ def _run_pipeline(
         """(Re)attach the LED renderer to a freshly opened device."""
         nonlocal renderers, last
         renderers = []
-        leds = MicroLedsRenderer(device=dev, config=pad)
+        leds = MicroLedsRenderer(device=dev, config=pad, ownership=ownership)
         # Kept in the list even with lighting off: it renders nothing and
         # touches nothing in that state, but staying attached is what lets
         # `freemicro lights --enable` take effect without a restart.
@@ -2401,6 +2423,10 @@ def _run_pipeline(
         pad = new_pad
         bridge.config = new_pad
         bridge.joystick = JoystickTracker(new_pad.joystick)
+        # The one shared owner both the bridge and the renderer read. Updated
+        # here, once, so a reload that adds or drops agent_keys.keys re-resolves
+        # against Codex on the next tick.
+        ownership.set_config(new_pad.agent_keys)
         for renderer in renderers:
             apply_config = getattr(renderer, "apply_config", None)
             if callable(apply_config):
@@ -2479,6 +2505,21 @@ def _run_pipeline(
         # cache, so acting on it here means the resend happens in *this* tick.
         for event in owner.poll():
             lighting_event(event)
+        # Re-check whether Codex is running (rate-limited to a few seconds, off
+        # the key path). When the answer flips, the effective owned set changes:
+        # Codex quit -> we now own all six and must paint the keys it was holding;
+        # Codex launched -> we contract and simply stop including AG00-AG02 in our
+        # thstatus (Codex repaints them). We cannot un-light a key we already lit,
+        # so a key FreeMicro drove then released keeps FreeMicro's last colour
+        # until Codex next writes it - honest, and the only thing a partial
+        # thstatus can do. Either way the renderer's cached frame no longer
+        # describes what is on the pad, so invalidate it to force a resend this
+        # tick. Does nothing at all under the all-six default.
+        if ownership.refresh():
+            for renderer in renderers:
+                invalidate = getattr(renderer, "invalidate", None)
+                if callable(invalidate):
+                    invalidate()
         # Before the frame is built, so the tick that notices a hold has
         # outlasted its timeout is the tick that repaints without it.
         _print_lighting(overlay.poll(), verbose)

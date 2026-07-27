@@ -496,13 +496,16 @@ def _subset_pad(keys, **lighting):
     })
 
 
-def test_a_subset_config_turns_on_a_reassert_cadence_by_itself():
+def test_a_subset_config_turns_on_a_reassert_cadence_while_codex_is_here():
     """Coexisting with Codex, the split must be held or the owned keys flicker.
 
     The default all-six config has no heartbeat; a strict subset auto-enables a
-    modest one so the vendor app cannot leave our keys showing its colour.
+    modest one so the vendor app cannot leave our keys showing its colour - but
+    only while the ChatGPT app is actually running to fight over the keys.
     """
-    owner, clock, renderer, _ = _owner(config=_subset_pad([3, 4, 5]))
+    owner, clock, renderer, running = _owner(config=_subset_pad([3, 4, 5]))
+    running["value"] = True
+    owner.poll()                               # establish that Codex is here
     clock.advance(COEXIST_HEARTBEAT_SECONDS - 0.1)
     assert owner.poll() == []
     clock.advance(0.2)
@@ -512,6 +515,42 @@ def test_a_subset_config_turns_on_a_reassert_cadence_by_itself():
     assert event.verbose_only is True          # periodic, so quiet by default
     assert "Codex" in event.message
     assert renderer.invalidations == 1
+
+
+def test_a_subset_heartbeat_stays_off_while_codex_is_absent():
+    """No ChatGPT app means FreeMicro owns all six - nothing to reassert against.
+
+    The subset only splits the keys while there is someone to share with. With
+    Codex gone FreeMicro drives all six, so the auto-heartbeat must stand down
+    rather than pay traffic to defend a split that is not in force.
+    """
+    owner, clock, renderer, running = _owner(config=_subset_pad([3, 4, 5]))
+    running["value"] = False
+    owner.poll()                               # Codex is not running
+    for _ in range(400):                       # 100s of ticks, no heartbeat
+        clock.advance(0.25)
+        assert owner.poll() == []
+    assert renderer.invalidations == 0
+
+
+def test_the_subset_heartbeat_stands_down_when_codex_quits():
+    """Codex quits mid-run: the pad now owns all six, so the heartbeat stops.
+
+    The quit itself reasserts once (the field is ours again); after that there
+    is nothing to hold the split against, so the periodic beat goes quiet.
+    """
+    owner, clock, renderer, running = _owner(config=_subset_pad([3, 4, 5]))
+    running["value"] = True
+    owner.poll()                               # coexisting, heartbeat armed
+    running["value"] = False
+    clock.advance(COEXIST_HEARTBEAT_SECONDS + 0.5)
+    # The vendor-quit reassert fires; the heartbeat does not double up behind it.
+    assert [e.reason for e in owner.poll()] == [REASON_VENDOR_QUIT]
+    invalidations = renderer.invalidations
+    for _ in range(40):                        # and stays quiet from here
+        clock.advance(0.25)
+        assert owner.poll() == []
+    assert renderer.invalidations == invalidations
 
 
 def test_the_default_all_six_config_has_no_auto_heartbeat():
@@ -536,7 +575,9 @@ def test_an_explicit_heartbeat_overrides_the_coexist_default():
 
 def test_a_subset_heartbeat_still_stands_down_while_keys_are_pressed():
     """The channel belongs to the keys - a reassert never lags a keypress."""
-    owner, clock, renderer, _ = _owner(config=_subset_pad([3, 4, 5]))
+    owner, clock, renderer, running = _owner(config=_subset_pad([3, 4, 5]))
+    running["value"] = True
+    owner.poll()                               # coexisting: heartbeat is armed
     clock.advance(COEXIST_HEARTBEAT_SECONDS + 1.0)
     owner.note_input()                          # a burst is in flight
     assert owner.poll() == []

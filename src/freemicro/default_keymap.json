@@ -137,8 +137,11 @@
     "add \"keys\" to the \"agent_keys\" section (e.g. \"keys\": [3, 4, 5]) to make",
     "FreeMicro drive only those keys and leave the rest for Codex. The split",
     "covers PRESSES as well as lighting: FreeMicro ignores presses on the keys it",
-    "does not own (no focus, no new terminal), so they are Codex's alone. Details",
-    "are in the \"agent_keys\" comment below and docs/CUSTOMIZING.md.",
+    "does not own (no focus, no new terminal), so they are Codex's alone. The",
+    "split only holds while the ChatGPT app is running: when it is not, there is",
+    "no one to share with, so FreeMicro drives all six (and expands/contracts on",
+    "its own within seconds as the app quits or launches). Details are in the",
+    "\"agent_keys\" comment below and docs/CUSTOMIZING.md.",
     "",
     "Full reference: docs/CUSTOMIZING.md"
   ],
@@ -479,10 +482,16 @@
       "well as lighting: an un-owned Agent Key is Codex's entirely, so FreeMicro",
       "ignores its presses (no focus, no new terminal, no bound action) - a",
       "binding on one never fires, and `freemicro keys --list` says which keys",
-      "are Codex's. While a subset is set, FreeMicro re-sends its keys every few",
-      "seconds to hold them against the ChatGPT app (see docs/CUSTOMIZING.md); it",
-      "never touches the keys it does not own. Relies on the firmware doing",
-      "partial thstatus updates."
+      "are Codex's.",
+      "The split only holds WHILE THE CHATGPT APP IS RUNNING to share with. When",
+      "it is not, FreeMicro drives all six even though a subset is set - there is",
+      "no one to leave keys for. This is dynamic: quit the ChatGPT app and within",
+      "a few seconds FreeMicro expands to all six; launch it and FreeMicro",
+      "contracts back to your subset and hands the rest to Codex. FreeMicro checks",
+      "on a slow poll (a few seconds, never on the key path). While actually",
+      "coexisting (subset set AND the app running) FreeMicro re-sends its keys",
+      "every few seconds to hold them against the app; it never touches the keys",
+      "it does not own. Relies on the firmware doing partial thstatus updates."
     ]
   }
 }

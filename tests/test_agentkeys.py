@@ -21,6 +21,7 @@ from freemicro.agentkeys import (
     POLICY_PINNED,
     POLICY_RECENT,
     SLOT_COUNT,
+    AgentKeyOwnership,
     AgentKeysConfig,
     AgentKeysError,
     SlotResolver,
@@ -85,6 +86,19 @@ def session(
     return SessionState(
         session_id=sid, state=state, updated_at=at, cwd=cwd, **kwargs
     )
+
+
+class FakeClock:
+    """Time that only moves when a test says so."""
+
+    def __init__(self, now: float = 1000.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 class FakeDevice:
@@ -353,6 +367,134 @@ def test_the_default_never_leaves_a_key_to_codex():
     # owns_all short-circuits, so the key path is byte-identical to before.
     config = AgentKeysConfig()
     assert not any(config.leaves_to_codex(f"AG{i:02d}") for i in range(6))
+
+
+# ---------------------------------------------------------------------------
+# Effective ownership: the subset only holds while the ChatGPT app is running
+# ---------------------------------------------------------------------------
+
+def _ownership(keys, running, *, poll_seconds=3.0):
+    """An AgentKeyOwnership over a subset config, with an injected clock+probe."""
+    clock = FakeClock()
+    own = AgentKeyOwnership(
+        AgentKeysConfig(keys=tuple(keys)),
+        probe=lambda: running["value"],
+        clock=clock,
+        poll_seconds=poll_seconds,
+    )
+    return own, clock
+
+
+def test_a_subset_is_honoured_only_while_codex_is_running():
+    running = {"value": True}
+    own, _ = _ownership((3, 4, 5), running)
+    own.refresh()                              # Codex here -> subset holds
+    assert own.keys == (3, 4, 5)
+    assert own.coexisting is True
+    assert own.leaves_to_codex("AG00") is True
+    assert own.leaves_to_codex("AG03") is False
+    assert own.owns(4) and not own.owns(0)
+
+
+def test_codex_absent_means_freemicro_owns_all_six():
+    running = {"value": False}
+    own, _ = _ownership((3, 4, 5), running)
+    own.refresh()                              # no one to share with
+    assert own.keys == (0, 1, 2, 3, 4, 5)
+    assert own.coexisting is False
+    # No key is left to Codex: an un-owned key is inert only while sharing.
+    assert not any(own.leaves_to_codex(f"AG{i:02d}") for i in range(6))
+    assert all(own.owns(i) for i in range(6))
+
+
+def test_before_the_first_probe_a_subset_is_assumed_active():
+    """The safe default: honour the configured split until a probe says otherwise.
+
+    A standalone owner that is never refreshed (the renderer preview path) keeps
+    the subset the user configured rather than briefly grabbing Codex's keys.
+    """
+    own = AgentKeyOwnership(AgentKeysConfig(keys=(3, 4, 5)), probe=lambda: False)
+    assert own.keys == (3, 4, 5)
+    assert own.leaves_to_codex("AG00") is True
+
+
+def test_refresh_reports_when_the_effective_set_changes():
+    running = {"value": True}
+    own, clock = _ownership((3, 4, 5), running)
+    assert own.refresh() is False              # True==assumed-default, no change
+    running["value"] = False
+    clock.advance(3.0)
+    assert own.refresh() is True               # Codex quit: now all six
+    assert own.keys == (0, 1, 2, 3, 4, 5)
+    running["value"] = True
+    clock.advance(3.0)
+    assert own.refresh() is True               # Codex back: subset again
+    assert own.keys == (3, 4, 5)
+
+
+def test_the_probe_is_rate_limited_to_the_poll_cadence():
+    calls = {"n": 0}
+    running = {"value": True}
+
+    def probe():
+        calls["n"] += 1
+        return running["value"]
+
+    clock = FakeClock()
+    own = AgentKeyOwnership(
+        AgentKeysConfig(keys=(3, 4, 5)), probe=probe, clock=clock, poll_seconds=3.0
+    )
+    for _ in range(40):                        # ten seconds of 0.25s ticks
+        clock.advance(0.25)
+        own.refresh()
+    assert calls["n"] == 4                      # not 40
+
+
+def test_owning_all_six_never_probes():
+    calls = {"n": 0}
+
+    def probe():
+        calls["n"] += 1
+        return False
+
+    own = AgentKeyOwnership(AgentKeysConfig(), probe=probe, clock=FakeClock())
+    for _ in range(10):
+        assert own.refresh() is False
+    assert own.keys == (0, 1, 2, 3, 4, 5)
+    assert calls["n"] == 0                      # zero cost under the default
+
+
+def test_set_config_re_resolves_against_codex_on_the_next_refresh():
+    running = {"value": False}
+    clock = FakeClock()
+    own = AgentKeyOwnership(AgentKeysConfig(), probe=lambda: running["value"],
+                            clock=clock)
+    own.refresh()                              # all-six default never probes
+    assert own.keys == (0, 1, 2, 3, 4, 5)
+    running["value"] = True
+    own.set_config(AgentKeysConfig(keys=(4, 5)))
+    assert own.keys == (4, 5)                   # assumed active before probing
+    own.refresh()                               # probes at once (checked_at reset)
+    assert own.coexisting is True and own.keys == (4, 5)
+
+
+def test_the_resolver_takes_an_effective_owned_set_that_overrides_the_config():
+    """Codex quits: the resolver must fill the keys it was leaving to Codex."""
+    config = AgentKeysConfig(policy=POLICY_RECENT, keys=(3, 4, 5))
+    sessions = [
+        session("a", AgentState.WORKING, "/code/api", at=NOW),
+        session("b", AgentState.WAITING, "/code/web", at=NOW - 1),
+    ]
+    resolver = SlotResolver(config=config)
+    # While coexisting, only AG03-AG05 are owned; the two projects land there.
+    while_here = resolver.resolve(sessions, now=NOW, owned=(3, 4, 5))
+    assert [s.owned for s in while_here] == [False, False, False, True, True, True]
+    assert while_here[3].project is not None
+    # Codex quits: all six owned. The keys it was holding now carry projects too,
+    # and the un-owned memory that was cleared does not strand them.
+    when_gone = resolver.resolve(sessions, now=NOW, owned=(0, 1, 2, 3, 4, 5))
+    assert all(s.owned for s in when_gone)
+    assert sum(1 for s in when_gone if s.project is not None) == 2
 
 
 # ---------------------------------------------------------------------------
