@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "freemicro"
-version = "0.4.1"
+version = "0.5.0"
 description = "Turn the OpenAI Codex Micro into a live status light for Claude Code: one Agent Key per project, lit with that project's real state, and every key remappable."
 readme = "README.md"
 requires-python = ">=3.9"

@@ -4,6 +4,19 @@ All notable changes to FreeMicro are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-27
+
+### Added
+- **`freemicro update`** upgrades to the latest release (detects pipx vs pip),
+  and `--check` reports whether one exists without installing. Offline-safe.
+
+### Changed
+- **The Codex coexistence split is now conditional.** With `agent_keys.keys` set
+  to a subset, FreeMicro honors it only while the ChatGPT app is running; when
+  Codex is not running there is no one to share with, so FreeMicro owns all six
+  keys. It expands and contracts within a few seconds as Codex quits or launches,
+  with lighting and presses always agreeing on which keys are FreeMicro's.
+
 ## [0.4.1] - 2026-07-27
 
 ### Fixed
@@ -384,6 +397,7 @@ The layers that predate the hardware work, and are still the backbone:
 - **There is no preset trust check yet.** A config you did not write is a
   program you did not read - see `docs/SECURITY-MODEL.md`.
 
+[0.5.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.5.0
 [0.4.1]: https://github.com/eliBenven/freemicro/releases/tag/v0.4.1
 [0.4.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.4.0
 [0.3.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.3.0
