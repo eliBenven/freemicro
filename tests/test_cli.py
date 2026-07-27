@@ -700,3 +700,30 @@ def test_the_render_loop_fires_the_alerter_on_a_transition(monkeypatch, tmp_path
     state, _prev, project = alerter.calls[0]
     assert state == AgentState.WAITING
     assert project == "myrepo"
+
+
+def test_update_check_reports_when_up_to_date(monkeypatch, capsys):
+    from freemicro import cli, __version__
+    monkeypatch.setattr(cli, "_latest_pypi_version", lambda *a, **k: __version__)
+    rc = cli.cmd_update(Namespace(check=True))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "latest version" in out
+
+
+def test_update_check_reports_and_signals_when_newer_exists(monkeypatch, capsys):
+    from freemicro import cli
+    monkeypatch.setattr(cli, "_latest_pypi_version", lambda *a, **k: "99.0.0")
+    rc = cli.cmd_update(Namespace(check=True))
+    out = capsys.readouterr().out
+    assert rc == 1            # non-zero so scripts can act on it
+    assert "update is available" in out
+    assert "freemicro" in out  # names the upgrade command
+
+
+def test_update_is_offline_safe(monkeypatch, capsys):
+    from freemicro import cli
+    monkeypatch.setattr(cli, "_latest_pypi_version", lambda *a, **k: None)
+    rc = cli.cmd_update(Namespace(check=True))
+    assert rc == 0            # cannot confirm an update, so do not claim one
+    assert "could not reach PyPI" in capsys.readouterr().out

@@ -65,6 +65,72 @@ def _hand_pad_back() -> None:
 # commands
 # ---------------------------------------------------------------------------
 
+def _latest_pypi_version(timeout: float = 4.0) -> "str | None":
+    """The newest version on PyPI, or None if we cannot reach it.
+
+    Best-effort and never raises: an update check must not fail the command
+    just because the machine is offline.
+    """
+    import json as _json
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(
+            "https://pypi.org/pypi/freemicro/json", timeout=timeout
+        ) as fh:
+            return _json.load(fh)["info"]["version"]
+    except Exception:  # noqa: BLE001 - offline is a normal answer here
+        return None
+
+
+def _installed_with_pipx() -> bool:
+    """Did pipx install this copy? True if the package lives under a pipx venv."""
+    import freemicro
+
+    parts = {p.lower() for p in os.path.normpath(freemicro.__file__).split(os.sep)}
+    return "pipx" in parts
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """Upgrade FreeMicro to the latest release, or check whether one exists."""
+    import subprocess
+
+    print(f"  installed: freemicro {__version__}")
+    latest = _latest_pypi_version()
+    if latest is None:
+        print("  latest:    could not reach PyPI (offline?)")
+    else:
+        print(f"  latest:    {latest}")
+        if latest == __version__:
+            print("\n  You are on the latest version.")
+            return 0
+
+    pipx = _installed_with_pipx()
+    cmd = (["pipx", "upgrade", "freemicro"] if pipx
+           else [sys.executable, "-m", "pip", "install", "--upgrade", "freemicro"])
+
+    if args.check:
+        newer = latest and latest != __version__
+        print(f"\n  {'An update is available.' if newer else 'Up to date.'}"
+              f"  To upgrade: {' '.join(cmd)}")
+        return 1 if newer else 0
+
+    print(f"\n  Upgrading with: {' '.join(cmd)}\n")
+    try:
+        result = subprocess.run(cmd, timeout=300)
+    except FileNotFoundError:
+        # pipx not on PATH: the copy was pipx-installed but pipx is gone.
+        print("  pipx is not on your PATH. Install it (brew install pipx) or "
+              "upgrade by hand:\n    pip install --upgrade freemicro")
+        return 1
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  Update failed: {exc}")
+        return 1
+    if result.returncode == 0:
+        print("\n  Updated. Restart `freemicro run` (or the daemon) to load it.")
+    return result.returncode
+
+
 def cmd_detect(args: argparse.Namespace) -> int:
     from freemicro.detector import probe
 
@@ -2519,6 +2585,11 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("detect", help="read-only HID capability probe (Milestone 0)")
     d.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     d.set_defaults(func=cmd_detect)
+
+    up = sub.add_parser("update", help="upgrade FreeMicro to the latest release")
+    up.add_argument("--check", action="store_true",
+                    help="only report whether an update exists; do not install")
+    up.set_defaults(func=cmd_update)
 
     st = sub.add_parser(
         "start", help="guided setup: permissions, pad, hooks, daemon, proof"
