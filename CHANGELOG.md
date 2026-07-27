@@ -4,6 +4,16 @@ All notable changes to FreeMicro are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-27
+
+### Added
+- **Coexist with Codex** (`agent_keys.keys`). FreeMicro can own a subset of the
+  six Agent Keys and leave the rest for the ChatGPT app, so Codex and Claude
+  Code can share the pad - three keys each, for example. FreeMicro sends a
+  partial `thstatus` for only its keys (leaving the others as Codex set them)
+  and auto-reasserts them so the split holds. Default is all six, unchanged.
+  `"agent_keys": {"keys": [3, 4, 5]}`.
+
 ## [0.3.0] - 2026-07-26
 
 Configurability: the pad adapts to context, and every key can carry more.
@@ -362,6 +372,7 @@ The layers that predate the hardware work, and are still the backbone:
 - **There is no preset trust check yet.** A config you did not write is a
   program you did not read - see `docs/SECURITY-MODEL.md`.
 
+[0.4.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.4.0
 [0.3.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.3.0
 [0.2.0]: https://github.com/eliBenven/freemicro/releases/tag/v0.2.0
 [0.1.2]: https://github.com/eliBenven/freemicro/releases/tag/v0.1.2
